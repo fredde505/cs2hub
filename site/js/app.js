@@ -1,4 +1,5 @@
-import { $, $$, esc, fx } from "./util.js";
+import { $, $$, esc, fx, dec, toast } from "./util.js";
+import { initSearch } from "./search.js";
 import { loadData, refreshLive, D, settings, setPriceMode, loadSettings } from "./data.js";
 import { getKV } from "./store.js";
 import { renderOverview } from "./views/overview.js";
@@ -15,6 +16,8 @@ import { renderPatterns } from "./views/patterns.js";
 import { renderCollections } from "./views/collections.js";
 import { renderCompare } from "./views/compare.js";
 import { renderShare } from "./views/share.js";
+import { skeletonCards } from "./views/common.js";
+import { initUpdateCheck, checkPriceAge, checkBackupReminder } from "./upkeep.js";
 import { renderFloats } from "./views/floats.js";
 
 const NAV = [
@@ -27,7 +30,7 @@ const NAV = [
 const TABS = [["overview", "Översikt", "◧"], ["inventory", "Inventory", "▤"], ["database", "Databas", "☰"], ["colors", "Färger", "◐"], ["menu", "Mer", "⋯"]];
 
 const ROUTES = {
-  overview: r => renderOverview(r), inventory: r => renderInventory(r), watchlist: r => renderWatchlist(r),
+  overview: r => renderOverview(r), inventory: (r, a) => renderInventory(r, ["holdings", "trades", "profit", "analysis"].includes(a[0]) ? a[0] : undefined), watchlist: r => renderWatchlist(r),
   database: (r, a) => renderList(r, { kind: a[0] }), item: (r, a) => renderItem(r, a[0]), collection: (r, a) => renderCollection(r, a[0]),
   colors: r => renderColors(r), inspect: (r, a) => renderInspect(r, a), tradeup: r => renderTradeup(r), patterns: (r, a) => renderPatterns(r, a), collections: (r, a) => renderCollections(r, a), compare: (r, a) => renderCompare(r, a), share: (r, a) => renderShare(r, a[0]), floats: r => renderFloats(r), loadout: (r, a) => renderLoadout(r, a), workshop: (r, a) => renderWorkshop(r, a), market: r => renderMarket(r), tools: r => renderTools(r),
 };
@@ -41,9 +44,10 @@ $("#menuBtn").addEventListener("click", () => side.classList.toggle("open"));
 $("#tabbar [data-r=menu]").addEventListener("click", e => { e.preventDefault(); side.classList.toggle("open"); });
 document.addEventListener("click", e => { if (side.classList.contains("open") && !e.target.closest(".side") && !e.target.closest("#menuBtn") && !e.target.closest("[data-r=menu]")) side.classList.remove("open"); if (e.target.closest("#nav a")) side.classList.remove("open"); });
 
-$("#globalSearch").addEventListener("keydown", e => {
-  if (e.key === "Enter" && e.target.value.trim()) { searchDatabase(e.target.value.trim()); e.target.blur(); }
-});
+// Offline-banner och vänlig hantering av oväntade fel
+const net = () => { $("#netBanner").hidden = navigator.onLine; };
+addEventListener("online", net); addEventListener("offline", net); net();
+addEventListener("unhandledrejection", e => { console.error(e.reason); toast("Något gick fel – försök igen. Hjälper det inte, ladda om sidan."); });
 
 let token = 0;
 async function route() {
@@ -54,7 +58,7 @@ async function route() {
   $("#topTitle").textContent = TITLES[name] || "Overview";
   const view = $("#view"); const my = ++token;
   try {
-    view.innerHTML = D.skins.length ? "" : `<div class="muted">Laddar data…</div>`;
+    view.innerHTML = D.skins.length ? "" : skeletonCards(12);
     await fn(view, args);
   } catch (e) {
     if (my === token) view.innerHTML = `<div class="empty"><b>Något gick fel</b><br><span class="small">${esc(e.message)}</span></div>`;
@@ -66,11 +70,13 @@ async function route() {
 function setStatus() {
   const age = D.priceAge ? new Date(D.priceAge).toLocaleString("sv-SE", { dateStyle: "short", timeStyle: "short" }) : null;
   $("#priceStatus").innerHTML = age ? `${D.live ? "● Priser uppdaterade" : "○ Äldre prissnapshot"}<br>${age}` : "Ingen prisdata";
-  $("#rateStatus").textContent = `1 USD = ${fx.rate.toFixed(2).replace(".", ",")} kr`;
+  $("#rateStatus").textContent = `1 USD = ${dec(fx.rate, 2)} kr`;
 }
 
 async function init() {
-  try { await loadData(); } catch (e) { $("#view").innerHTML = `<div class="empty"><b>Kunde inte ladda databasen</b><br><span class="small">${esc(e.message)}. Kör <code>python tools/build_data.py</code> och servera mappen <code>site/</code> via en webbserver.</span></div>`; return; }
+  $("#view").innerHTML = skeletonCards(12);
+  try { await loadData(); } catch (e) { $("#view").innerHTML = `<div class="empty"><div class="empty-ico">!</div><b>Kunde inte ladda databasen</b><div class="muted small" style="margin:6px 0 14px">${esc(e.message)}<br>Kontrollera din internetanslutning och försök igen.</div><button class="btn" onclick="location.reload()">Försök igen</button></div>`; return; }
+  initSearch($("#globalSearch"), q => searchDatabase(q));
   await loadSettings();
   await setPriceMode(await getKV("priceMode", "market"));
   $("#priceMode").value = settings.priceMode;
@@ -79,7 +85,8 @@ async function init() {
   window.addEventListener("hashchange", route);
   await route();
   startWatchPolling(); notifyNewHits();
-  refreshLive(m => $("#priceStatus").textContent = m).then(async ok => { setStatus(); await recordSnapshot(); if (ok) { const n = (location.hash.split("/")[1] || "overview"); if (["overview", "inventory", "market"].includes(n)) route(); } });
+  initUpdateCheck(); checkPriceAge(); checkBackupReminder();
+  refreshLive(m => $("#priceStatus").textContent = m).then(async ok => { setStatus(); checkPriceAge(); await recordSnapshot(); if (ok) { const n = (location.hash.split("/")[1] || "overview"); if (["overview", "inventory", "market"].includes(n)) route(); } });
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => { });
 }
 init();

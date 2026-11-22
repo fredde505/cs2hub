@@ -5,8 +5,9 @@ import { loadState, buildRows, totals, posKey } from "../finance.js";
 import { pageHead, stat, itemPicker, KIND_LABEL, emptyState, priceNote } from "./common.js";
 import { shareModal } from "./share.js";
 import { steamImportModal } from "./steam-import.js";
+import { backupNow } from "../upkeep.js";
 
-const V = { tab: "holdings", mode: "cash", view: "table", q: "", kind: "", cat: "", rarity: "", color: "", pmin: "", pmax: "", fmin: "", fmax: "", cost: "", fav: false, hidden: false, sort: "value" };
+const V = { tab: "holdings", mode: "cash", view: "cards", fOpen: false, q: "", kind: "", cat: "", rarity: "", color: "", pmin: "", pmax: "", fmin: "", fmax: "", cost: "", fav: false, hidden: false, sort: "value" };
 const sel = new Set(); // markerade föremål (masshantering)
 let rerender = () => { };
 
@@ -30,24 +31,32 @@ export async function renderInventory(root, tab) {
   const steamMode = V.mode === "steam";
   const val = steamMode ? t.steam : t.cash;
   const unreal = steamMode ? t.unrealizedSteam : t.unrealizedCash;
+  const hasSales = [...pos.values()].some(p => p.sold > 0);
+  const totalPL = (t.withCost ? unreal : 0) + (hasSales ? t.realized : 0);
   const pts = snaps.sort((a, b) => a.ts - b.ts).map(s => ({ x: s.ts, y: steamMode ? s.steam : s.cash }));
   const unique = new Set(rows.filter(r => !r.it.hidden).map(r => r.mhn)).size;
   const best = rows.filter(r => r.cost && (steamMode ? r.plSteam : r.plCash) != null).map(r => ({ r, pc: (steamMode ? r.plSteam : r.plCash) / r.cost * 100 })).sort((a, b) => b.pc - a.pc)[0];
+  const showPL = t.withCost || hasSales;
+  const charts = `<div class="grid split" style="margin-bottom:18px">
+      <div class="panel"><h2>Värdeutveckling</h2>${lineChart(pts, { fmt: v => kr(v), since: snaps[0]?.ts })}</div>
+      <div class="panel"><h2>Värde per kategori</h2>${categoryBars(t, steamMode)}</div></div>`;
 
   root.innerHTML = `<div class="row spread" style="align-items:flex-start"><div>${pageHead("My Inventory", "Värde, inköp och vinst – allt sparas lokalt i din webbläsare.")}</div>
     <div class="row"><button class="btn ghost" id="bShare">Dela</button><button class="btn ghost" id="bImport">Hämta Steam-inventory</button><button class="btn" id="bAdd">+ Lägg till föremål</button></div></div>
-    <div class="grid cols-4" style="margin-bottom:12px">
-      ${stat(steamMode ? "Värde i Steam-krediter" : "Värde i riktiga pengar", kr(val), `${t.count} föremål · ${unique} olika${t.unpricedItems ? ` · <span class="miss">${t.unpricedItems} utan pris</span>` : ""}`)}
-      ${stat("Investerat (inköp)", kr(t.cost), `${t.withCost} av ${t.withCost + t.withoutCost} har inköpspris`)}
-      ${stat("Orealiserad vinst/förlust", t.withCost ? signKr(unreal) : "–", t.withCost ? pct(unreal / t.cost * 100) + " på investerat" : "Registrera inköp för att se vinst", cls(unreal))}
-      ${stat("Realiserad vinst/förlust", signKr(t.realized), `Efter avgifter (${kr(t.fees)})`, cls(t.realized))}
+    <div class="kpis">
+      <div class="panel stat"><div class="row spread" style="flex-wrap:nowrap"><span class="lbl">Totalt värde</span><div class="seg sm" id="modeSeg"><button data-m="cash" class="${!steamMode ? "on" : ""}" title="Netto efter marknadsavgift – vad du får ut">Riktiga pengar</button><button data-m="steam" class="${steamMode ? "on" : ""}" title="Steam Market-pris – krediter som inte går att ta ut">Steam</button></div></div>
+        <div class="val num">${kr(val)}</div><div class="sub">${steamMode ? "Steam-krediter, går inte att ta ut" : "netto efter marknadsavgift"}</div></div>
+      ${stat("Vinst / förlust", showPL ? signKr(totalPL) : "–", showPL ? `${t.withCost ? "orealiserad " + signKr(unreal) : ""}${t.withCost && hasSales ? " · " : ""}${hasSales ? "realiserad " + signKr(t.realized) : ""}` : "Registrera inköp för att se vinst", cls(totalPL))}
+      ${stat("Investerat", t.withCost ? kr(t.cost) : "–", `${t.withCost} av ${t.withCost + t.withoutCost} har inköpspris${best ? ` · bäst: ${esc(best.r.e?.p || best.r.name)} ${pct(best.pc)}` : ""}`)}
+      ${stat("Föremål", `${t.count}`, `${unique} olika${t.unpricedItems ? ` · <span class="miss" title="Saknar prisdata och ingår inte i värdet">${t.unpricedItems} utan pris</span>` : ""}${t.notSellable ? ` · ${t.notSellable} ej säljbara` : ""}`)}
     </div>
-    ${t.unpricedItems ? `<div class="panel" style="margin-bottom:12px;border-color:#5a4a2a"><span class="miss">Pris saknas</span> <span class="muted">${t.unpricedItems} föremål saknar prisdata och ingår <b>inte</b> i värdet ovan – de är inte gratis, bara okända för oss ännu.</span></div>` : ""}
-    <div class="row spread" style="margin-bottom:12px"><div class="seg" id="modeSeg"><button data-m="cash" class="${!steamMode ? "on" : ""}">Riktiga pengar</button><button data-m="steam" class="${steamMode ? "on" : ""}">Steam-krediter</button></div>
-      <span class="muted small">${steamMode ? "Steam Market-pris. Krediterna går bara att använda på Steam, inte ta ut." : "Beräknat netto efter marknadsavgift på Skinport/CSFloat – vad du faktiskt får ut."}${best ? ` Bästa investering: ${esc(best.r.e?.p || best.r.name)} (${pct(best.pc)}).` : ""}</span></div>
-    <div class="grid split" style="margin-bottom:18px">
-      <div class="panel"><h2>Värdeutveckling</h2>${lineChart(pts, { fmt: v => kr(v), since: snaps[0]?.ts })}</div>
-      <div class="panel"><h2>Värde per kategori</h2>${categoryBars(t, steamMode)}</div></div>
+    <details class="muted small" style="margin:-4px 0 14px"><summary style="cursor:pointer;width:max-content">Så räknas siffrorna – uppskattat eller registrerat?</summary>
+      <ul style="margin:8px 0 0;padding-left:18px;line-height:1.7"><li><b>Totalt värde</b> är en <b>uppskattning</b> från marknadspriser (netto efter avgift, eller Steam-pris om du valt det) – inte något du fått betalt.</li>
+      <li><b>Investerat</b> är det du själv <b>registrerat</b> som köp (inklusive avgifter). Föremål utan registrerat köp ingår inte.</li>
+      <li><b>Orealiserad vinst</b> = uppskattat värde minus din registrerade kostnad. Den ändras med marknaden tills du säljer.</li>
+      <li><b>Realiserad vinst</b> bygger bara på försäljningar du <b>registrerat</b> (pris minus avgift minus snittkostnad).</li>
+      <li><b>≈ vid snittinköp</b> betyder att köpet registrerades utan float, så snittet för skinet används – inte exakt för just det exemplaret.</li>
+      <li><b>Doppler-faser</b> prissätts inte per fas i vår prisdata – se märket "fas ej prissatt".</li></ul></details>
     <div class="tabs">${[["holdings", "Innehav"], ["trades", "Transaktioner"], ["profit", "Vinst per föremål"], ["analysis", "Analys"]].map(([k, l]) => `<button data-t="${k}" class="${V.tab === k ? "on" : ""}">${l}</button>`).join("")}</div>
     <div id="tabBody"></div>
     <p class="muted small" style="margin-top:14px">${esc(priceNote())}</p>`;
@@ -60,7 +69,7 @@ export async function renderInventory(root, tab) {
   if (V.tab === "holdings") holdingsTab(body, rows);
   else if (V.tab === "trades") tradesTab(body, trades);
   else if (V.tab === "profit") profitTab(body, rows, pos, steamMode);
-  else analysisTab(body, rows, t, steamMode);
+  else analysisTab(body, rows, t, steamMode, charts);
 }
 
 function categoryBars(t, steamMode) {
@@ -72,27 +81,68 @@ function categoryBars(t, steamMode) {
 }
 
 /* ============================ Innehav ============================ */
+const activeFilters = () => [V.kind, V.cat, V.rarity, V.color, V.cost, V.pmin, V.pmax, V.fmin, V.fmax, V.fav ? "1" : "", V.hidden ? "1" : ""].filter(x => x !== "").length;
+
+/** Flytande ••• -meny (position:fixed så den inte klipps av tabellens scrollyta). */
+function openMenu(btn, items) {
+  document.querySelectorAll(".menu-pop").forEach(m => m.remove());
+  const m = document.createElement("div"); m.className = "menu-pop"; m.setAttribute("role", "menu");
+  m.innerHTML = items.map((it, i) => it.href ? `<a role="menuitem" href="${esc(it.href)}">${esc(it.label)}</a>` : `<button role="menuitem" data-i="${i}" class="${it.danger ? "danger" : ""}">${esc(it.label)}</button>`).join("");
+  document.body.appendChild(m);
+  const r = btn.getBoundingClientRect(), mw = m.offsetWidth, mh = m.offsetHeight;
+  m.style.left = Math.max(8, Math.min(innerWidth - mw - 8, r.right - mw)) + "px";
+  m.style.top = (r.bottom + mh + 8 > innerHeight ? Math.max(8, r.top - mh - 4) : r.bottom + 4) + "px";
+  const close = () => { m.remove(); document.removeEventListener("pointerdown", outside, true); document.removeEventListener("keydown", esc_); removeEventListener("scroll", close, true); };
+  const outside = e => { if (!m.contains(e.target)) close(); }, esc_ = e => e.key === "Escape" && close();
+  setTimeout(() => { document.addEventListener("pointerdown", outside, true); document.addEventListener("keydown", esc_); addEventListener("scroll", close, true); });
+  m.querySelectorAll("button").forEach(b => b.addEventListener("click", () => { close(); items[+b.dataset.i].run(); }));
+  m.querySelectorAll("a").forEach(a => a.addEventListener("click", close));
+}
+
+/** Snabbregistrera inköpspris utan att öppna den stora transaktionsrutan. */
+function quickCostModal(r, done) {
+  modal(`<h3>Vad betalade du?</h3><p class="muted small" style="margin-top:0">${esc(r.mhn)}${r.float != null ? " · float " + dec(r.float, 4) : ""}</p>
+    <div class="form"><label>Pris per st (kr)<input class="inp" id="qp" type="number" min="0" step="0.01" placeholder="${r.unit != null ? dec(r.unit, 2) : ""}"></label><label>Antal<input class="inp" id="qq" type="number" min="1" value="${r.qty}"></label>
+    <label>Datum<input class="inp" id="qd" type="date" value="${today()}"></label><label>Avgift totalt (kr)<input class="inp" id="qf" type="number" min="0" step="0.01" value="0"></label></div>
+    <div class="row" style="margin-top:16px;justify-content:flex-end"><button class="btn ghost" data-close>Avbryt</button><button class="btn" id="qs">Spara</button></div>`, {
+    onMount: (m, close) => {
+      m.querySelector("#qp").focus();
+      m.querySelector("#qs").addEventListener("click", async () => {
+        const price = m.querySelector("#qp").value;
+        if (price === "" || !(+price >= 0)) return toast("Ange pris per st");
+        await put("trades", { id: uid(), type: "buy", mhn: r.mhn, qty: Math.max(1, Math.floor(+m.querySelector("#qq").value) || 1), price: +price, fee: +m.querySelector("#qf").value || 0, date: new Date(m.querySelector("#qd").value).getTime() || Date.now(), market: "", pay: "cash", float: r.float, seed: r.seed, note: "", created: Date.now() });
+        close(); toast("Inköpspris sparat"); done();
+      });
+    },
+  });
+}
+
 function holdingsTab(body, allRows) {
   const cats = [...new Set(allRows.map(r => r.e?.c).filter(Boolean))].sort();
   const rars = [...new Set(allRows.map(r => r.rarity).filter(Boolean))].sort((a, b) => rarityOrder.indexOf(a) - rarityOrder.indexOf(b));
   const kinds = [...new Set(allRows.map(r => r.kind))];
   const opt = (id, label, opts, val, lab = x => x) => `<select class="inp" id="${id}" aria-label="${esc(label)}"><option value="">${label}</option>${opts.map(o => `<option value="${esc(o)}" ${o === val ? "selected" : ""}>${esc(lab(o))}</option>`).join("")}</select>`;
+  const n = activeFilters();
   body.innerHTML = `<div class="toolbar">
-    <input class="inp" id="q" placeholder="Sök i inventory…" value="${esc(V.q)}" style="min-width:160px" aria-label="Sök i inventory">
-    ${opt("kind", "Alla typer", kinds, V.kind, k => KIND_LABEL[k] || k)}${cats.length ? opt("cat", "Alla vapentyper", cats, V.cat) : ""}${opt("rar", "Alla rarities", rars, V.rarity)}
-    ${opt("col", "Alla färger", Object.keys(COLORS), V.color, c => COLOR_LABEL[c])}
-    <select class="inp" id="cost" aria-label="Inköpspris"><option value="">Inköpspris: alla</option><option value="has" ${V.cost === "has" ? "selected" : ""}>Har inköpspris</option><option value="none" ${V.cost === "none" ? "selected" : ""}>Saknar inköpspris</option></select>
-    <input class="inp" id="pmin" type="number" placeholder="Min kr" style="width:84px" value="${esc(V.pmin)}"><input class="inp" id="pmax" type="number" placeholder="Max kr" style="width:84px" value="${esc(V.pmax)}">
-    <input class="inp" id="fmin" type="number" step="0.01" min="0" max="1" placeholder="Float ≥" style="width:84px" value="${esc(V.fmin)}"><input class="inp" id="fmax" type="number" step="0.01" min="0" max="1" placeholder="Float ≤" style="width:84px" value="${esc(V.fmax)}">
-    <label class="chip ${V.fav ? "on" : ""}" id="fav">★ Favoriter</label><label class="chip ${V.hidden ? "on" : ""}" id="hid">Visa dolda</label>
+    <input class="inp" id="q" type="search" placeholder="Sök i inventory…" value="${esc(V.q)}" style="flex:1;min-width:160px;max-width:340px" aria-label="Sök i inventory">
     <select class="inp" id="sort" aria-label="Sortera">${[["value", "Värde ↓"], ["name", "Namn"], ["pl", "Vinst ↓"], ["plr", "Förlust ↓"], ["float", "Float ↑"]].map(([v, l]) => `<option value="${v}" ${V.sort === v ? "selected" : ""}>${l}</option>`).join("")}</select>
-    <div class="seg" id="viewSeg">${[["table", "Tabell"], ["compact", "Kompakt"], ["cards", "Bildkort"]].map(([v, l]) => `<button data-v="${v}" class="${V.view === v ? "on" : ""}">${l}</button>`).join("")}</div></div>
+    <div class="seg" id="viewSeg">${[["cards", "Bildkort"], ["table", "Tabell"]].map(([v, l]) => `<button data-v="${v}" class="${V.view === v ? "on" : ""}">${l}</button>`).join("")}</div>
+    <button class="btn ghost ${n ? "on-filter" : ""}" id="fbtn" aria-expanded="${!!V.fOpen}">Filter (${n})</button></div>
+    <div class="panel" id="fpanel" style="margin-bottom:12px" ${V.fOpen ? "" : "hidden"}><div class="fgrid">
+      ${opt("kind", "Alla typer", kinds, V.kind, k => KIND_LABEL[k] || k)}${cats.length ? opt("cat", "Alla vapentyper", cats, V.cat) : ""}${opt("rar", "Alla rarities", rars, V.rarity)}${opt("col", "Alla färger", Object.keys(COLORS), V.color, c => COLOR_LABEL[c])}
+      <select class="inp" id="cost" aria-label="Inköpspris"><option value="">Inköpspris: alla</option><option value="has" ${V.cost === "has" ? "selected" : ""}>Har inköpspris</option><option value="none" ${V.cost === "none" ? "selected" : ""}>Saknar inköpspris</option></select>
+      <div class="row" style="flex-wrap:nowrap"><input class="inp" id="pmin" type="number" placeholder="Min kr" value="${esc(V.pmin)}" aria-label="Lägsta värde"><input class="inp" id="pmax" type="number" placeholder="Max kr" value="${esc(V.pmax)}" aria-label="Högsta värde"></div>
+      <div class="row" style="flex-wrap:nowrap"><input class="inp" id="fmin" type="number" step="0.01" min="0" max="1" placeholder="Float ≥" value="${esc(V.fmin)}" aria-label="Lägsta float"><input class="inp" id="fmax" type="number" step="0.01" min="0" max="1" placeholder="Float ≤" value="${esc(V.fmax)}" aria-label="Högsta float"></div>
+      <div class="row"><label class="chip ${V.fav ? "on" : ""}" id="fav">★ Favoriter</label><label class="chip ${V.hidden ? "on" : ""}" id="hid">Visa dolda</label><button class="btn ghost sm" id="fclear" style="margin-left:auto">Rensa filter</button></div></div></div>
     <div id="bulk"></div><div id="list"></div>`;
-  const bind = (id, key, ev = "input") => { const el = $("#" + id, body); el && el.addEventListener(ev, debounce(() => { V[key] = el.value; draw(); }, 140)); };
+  const bind = (id, key, ev = "input") => { const el = $("#" + id, body); el && el.addEventListener(ev, debounce(() => { V[key] = el.value; draw(); updBtn(); }, 140)); };
+  const updBtn = () => { const k = activeFilters(); $("#fbtn", body).textContent = `Filter (${k})`; $("#fbtn", body).classList.toggle("on-filter", k > 0); };
   bind("q", "q"); bind("kind", "kind", "change"); bind("cat", "cat", "change"); bind("rar", "rarity", "change"); bind("col", "color", "change"); bind("cost", "cost", "change");
   bind("pmin", "pmin"); bind("pmax", "pmax"); bind("fmin", "fmin"); bind("fmax", "fmax"); bind("sort", "sort", "change");
-  $("#fav", body).addEventListener("click", e => { V.fav = !V.fav; e.currentTarget.classList.toggle("on", V.fav); draw(); });
-  $("#hid", body).addEventListener("click", e => { V.hidden = !V.hidden; e.currentTarget.classList.toggle("on", V.hidden); draw(); });
+  $("#fbtn", body).addEventListener("click", e => { V.fOpen = !V.fOpen; $("#fpanel", body).hidden = !V.fOpen; e.currentTarget.setAttribute("aria-expanded", V.fOpen); });
+  $("#fav", body).addEventListener("click", e => { V.fav = !V.fav; e.currentTarget.classList.toggle("on", V.fav); draw(); updBtn(); });
+  $("#hid", body).addEventListener("click", e => { V.hidden = !V.hidden; e.currentTarget.classList.toggle("on", V.hidden); draw(); updBtn(); });
+  $("#fclear", body).addEventListener("click", () => { Object.assign(V, { kind: "", cat: "", rarity: "", color: "", cost: "", pmin: "", pmax: "", fmin: "", fmax: "", fav: false, hidden: false }); rerender(); });
   $$("#viewSeg button", body).forEach(b => b.addEventListener("click", () => { V.view = b.dataset.v; $$("#viewSeg button", body).forEach(x => x.classList.toggle("on", x === b)); draw(); }));
 
   const steamMode = V.mode === "steam";
@@ -120,16 +170,23 @@ function holdingsTab(body, allRows) {
     });
     const s = V.sort, v = r => value(r) ?? -1;
     rows.sort((a, b) => s === "name" ? a.name.localeCompare(b.name) : s === "pl" ? (pl(b) ?? -1e12) - (pl(a) ?? -1e12) : s === "plr" ? (pl(a) ?? 1e12) - (pl(b) ?? 1e12) : s === "float" ? (a.float ?? 9) - (b.float ?? 9) : v(b) - v(a));
-    shown = rows.slice(0, 300);
+    shown = rows.slice(0, V.view === "cards" ? 120 : 300);
     const host = $("#list", body);
     if (!allRows.length) { host.innerHTML = emptyState("Ditt inventory är tomt", "Hämta ditt publika Steam-inventory eller lägg till föremål manuellt. Registrera sedan vad du betalade, så räknar sidan ut vinst och förlust.", `<button class="btn" id="e1">Hämta Steam-inventory</button> <button class="btn ghost" id="e2">+ Lägg till föremål</button>`); $("#e1", host).onclick = () => steamImportModal(rerender); $("#e2", host).onclick = () => addItemModal({}); bulk(); return; }
-    if (!rows.length) { host.innerHTML = emptyState("Inga föremål matchar", "Prova att ta bort något filter."); bulk(); return; }
-    host.innerHTML = (V.view === "cards" ? cardsView(shown) : tableView(shown, V.view === "compact")) + (rows.length > 300 ? `<div class="muted small" style="margin-top:8px">Visar 300 av ${rows.length}. Använd filter för att begränsa.</div>` : "");
+    if (!rows.length) { host.innerHTML = emptyState("Inga föremål matchar", "Prova att ta bort något filter.", `<button class="btn ghost" id="e3">Rensa filter</button>`); $("#e3", host).onclick = () => $("#fclear", body).click(); bulk(); return; }
+    host.innerHTML = (V.view === "cards" ? cardsView(shown) : tableView(shown)) + (rows.length > shown.length ? `<div class="muted small" style="margin-top:8px">Visar ${shown.length} av ${rows.length}. Använd sök och filter för att begränsa.</div>` : "");
+    const byId = id => allRows.find(x => x.it.id === id);
     host.querySelectorAll("[data-a]").forEach(b => b.addEventListener("click", async () => {
-      const r = allRows.find(x => x.it.id === b.dataset.id); if (!r) return;
+      const r = byId(b.dataset.id); if (!r) return;
       if (b.dataset.a === "fav") { r.it.fav = !r.it.fav; await put("items", r.it); rerender(); }
-      else if (b.dataset.a === "sell") tradeModal({ mhn: r.mhn, type: "sell", item: r.it, onDone: rerender });
-      else editItemModal(r.it, rerender);
+      else if (b.dataset.a === "cost") quickCostModal({ ...r, unit: unit(r) }, rerender);
+      else if (b.dataset.a === "menu") openMenu(b, [
+        { label: "Sälj", run: () => tradeModal({ mhn: r.mhn, type: "sell", item: r.it, onDone: rerender }) },
+        { label: "Redigera", run: () => editItemModal(r.it, rerender) },
+        { label: r.it.hidden ? "Visa" : "Dölj", run: async () => { r.it.hidden = !r.it.hidden; await put("items", r.it); rerender(); } },
+        ...(r.e?.wr?.length ? [{ label: "Inspect & Float", href: "#/inspect/" + r.e.id }] : []),
+        ...(r.e ? [{ label: "Öppna i databasen", href: "#/item/" + r.e.id }] : []),
+      ]);
     }));
     host.querySelectorAll("[data-sel]").forEach(c => c.addEventListener("change", () => { c.checked ? sel.add(c.dataset.sel) : sel.delete(c.dataset.sel); bulk(); }));
     const all_ = host.querySelector("#selAll"); if (all_) all_.addEventListener("change", () => { shown.forEach(r => all_.checked ? sel.add(r.it.id) : sel.delete(r.it.id)); host.querySelectorAll("[data-sel]").forEach(c => c.checked = all_.checked); bulk(); });
@@ -149,24 +206,29 @@ function holdingsTab(body, allRows) {
     }));
   }
 
-  const nameBlock = r => `<div style="min-width:0"><div class="n1">${esc(r.e?.w || KIND_LABEL[r.kind] || "")}${r.wear ? " · " + r.wear : ""}${r.st ? " · ST™" : ""}${r.c1 ? ` <i class="dot" style="background:${esc(r.e.hx)}"></i>` : ""}${r.it.fav ? ' <span style="color:#e8c26a">★</span>' : ""}</div>
-    <div class="n2">${esc((r.e?.p || r.e?.n.replace(/^(Sticker|Charm|Patch) \| /, "") || r.name) + (r.e?.ph ? " · " + r.e.ph : ""))}</div>${r.it.nametag ? `<div class="n1">"${esc(r.it.nametag)}"</div>` : ""}</div>`;
-  const costCell = r => r.unitCost != null ? `${r.costApprox ? "≈ " : ""}${kr(r.unitCost)}` : '<span class="faint">saknas</span>';
+  const title = r => esc((r.e?.p || r.e?.n.replace(/^(Sticker|Charm|Patch) \| /, "") || r.name) + (r.e?.ph ? " · " + r.e.ph : ""));
+  const sub = r => `${esc(r.e?.w || KIND_LABEL[r.kind] || "")}${r.wear ? " · " + r.wear : ""}${r.st ? " · ST™" : ""}${r.c1 ? ` <i class="dot" style="background:${esc(r.e.hx)}"></i>` : ""}`;
+  const nameBlock = r => `<div style="min-width:0"><div class="n1">${sub(r)}${r.it.fav ? ' <span style="color:#e8c26a">★</span>' : ""}</div><div class="n2">${title(r)}</div>${r.it.nametag ? `<div class="n1">"${esc(r.it.nametag)}"</div>` : ""}</div>`;
   const plCell = r => { const p = pl(r); return p != null ? `${signKr(p)}<div class="small">${r.cost ? pct(p / r.cost * 100) : ""}</div>` : '<span class="faint">–</span>'; };
-  const valCell = r => { const v = value(r); return `<span title="${esc(priceTip(r.mhn))}">${v != null ? kr(v) : MISSING}</span>${r.qty > 1 && unit(r) != null ? `<div class="faint small">${kr(unit(r))} /st</div>` : ""}`; };
-  const actions = r => `<button class="btn ghost sm" data-a="fav" data-id="${esc(r.it.id)}" aria-label="Favorit" style="${r.it.fav ? "color:#e8c26a" : ""}">★</button> <button class="btn ghost sm" data-a="sell" data-id="${esc(r.it.id)}">Sälj</button> <button class="btn ghost sm" data-a="edit" data-id="${esc(r.it.id)}">Redigera</button>`;
-  function tableView(rows, compact) {
-    return `<div class="panel scroll-x" style="padding:0"><table class="tbl ${compact ? "compact" : ""}"><thead><tr><th class="sel-col"><input type="checkbox" id="selAll" aria-label="Markera alla"></th><th>Föremål</th><th class="r hide-m">Antal</th><th class="r hide-m">Float / seed</th><th class="r hide-m">Snittinköp</th><th class="r">Värde</th><th class="r">Vinst/förlust</th><th></th></tr></thead><tbody>
+  const costCell = r => r.unitCost != null ? (r.costApprox ? `<span title="Snitt av dina köp utan float – inte exakt för just det här exemplaret.">≈ ${kr(r.unitCost)}</span>` : kr(r.unitCost)) : `<button class="linkbtn" data-a="cost" data-id="${esc(r.it.id)}">+ Lägg till</button>`;
+  const valCell = r => { const v = value(r); return `<span title="${r.notSellable ? "Det här föremålet går inte att sälja på någon marknad." : esc(priceTip(r.mhn))}">${v != null ? kr(v) : r.notSellable ? '<span class="faint">Ej säljbar</span>' : MISSING}</span>${r.qty > 1 && unit(r) != null ? `<div class="faint small">${r.qty} st · ${kr(unit(r))}/st</div>` : r.qty > 1 ? `<div class="faint small">${r.qty} st</div>` : ""}${/^(Gamma )?Doppler$/.test(r.e?.p || "") ? '<div class="faint small" title="Prisdata skiljer inte på Doppler-faser. Priset är lägsta för modellen; Ruby, Sapphire, Black Pearl och Emerald är ofta värda mycket mer.">fas ej prissatt</div>' : ""}`; };
+  const menuBtn = r => `<button class="btn ghost sm" data-a="menu" data-id="${esc(r.it.id)}" aria-haspopup="menu" aria-label="Fler åtgärder">•••</button>`;
+  const starBtn = r => `<button class="btn ghost sm" data-a="fav" data-id="${esc(r.it.id)}" aria-label="Favorit" style="${r.it.fav ? "color:#e8c26a" : ""}">★</button>`;
+  function tableView(rows) {
+    const anyFloat = rows.some(r => r.float != null || r.seed != null); // dölj tom kolumn
+    return `<div class="panel scroll-x" style="padding:0"><table class="tbl"><thead><tr><th class="sel-col"><input type="checkbox" id="selAll" aria-label="Markera alla"></th><th>Föremål</th>${anyFloat ? '<th class="r hide-m">Float / seed</th>' : ""}<th class="r hide-m">Snittinköp</th><th class="r">Värde</th><th class="r">Vinst/förlust</th><th></th></tr></thead><tbody>
     ${rows.map(r => `<tr style="${r.it.hidden ? "opacity:.45" : ""}"><td class="sel-col"><input type="checkbox" data-sel="${esc(r.it.id)}" ${sel.has(r.it.id) ? "checked" : ""} aria-label="Markera"></td>
-      <td><div class="nm"><span class="rar" style="--rc:${esc(r.rc)}"></span>${compact ? "" : `<img loading="lazy" src="${esc(imgUrl(r.img, "128fx96f"))}" alt="" width="56" height="42">`}${nameBlock(r)}</div></td>
-      <td class="r num hide-m">${r.qty}</td><td class="r num hide-m">${r.float != null ? dec(r.float, 4) : "–"}${r.seed != null ? `<div class="faint small">seed ${r.seed}</div>` : ""}</td><td class="r num hide-m">${costCell(r)}</td>
-      <td class="r num">${valCell(r)}</td><td class="r num ${cls(pl(r))}">${plCell(r)}</td><td class="r" style="white-space:nowrap">${actions(r)}</td></tr>`).join("")}</tbody></table></div>`;
+      <td><div class="nm"><span class="rar" style="--rc:${esc(r.rc)}"></span><img loading="lazy" src="${esc(imgUrl(r.img, "128fx96f"))}" alt="" width="56" height="42">${nameBlock(r)}</div></td>
+      ${anyFloat ? `<td class="r num hide-m">${r.float != null ? dec(r.float, 4) : '<span class="faint">–</span>'}${r.seed != null ? `<div class="faint small">seed ${r.seed}</div>` : ""}</td>` : ""}<td class="r num hide-m">${costCell(r)}</td>
+      <td class="r num">${valCell(r)}</td><td class="r num ${cls(pl(r))}">${plCell(r)}</td><td class="r" style="white-space:nowrap">${starBtn(r)} ${menuBtn(r)}</td></tr>`).join("")}</tbody></table></div>`;
   }
   function cardsView(rows) {
-    return `<div class="cards">${rows.map(r => `<div class="card" style="--rc:${esc(r.rc)};${r.it.hidden ? "opacity:.5" : ""}"><label style="position:absolute;left:8px;top:8px;z-index:2"><input type="checkbox" data-sel="${esc(r.it.id)}" ${sel.has(r.it.id) ? "checked" : ""} aria-label="Markera"></label>
-      <div class="im"><img loading="lazy" src="${esc(imgUrl(r.img, "192fx144f"))}" alt="" width="192" height="144">${r.qty > 1 ? `<span class="tag">×${r.qty}</span>` : ""}</div><div class="bar"></div>
-      <div class="bd">${nameBlock(r)}<div class="pr num">${valCell(r)}</div><div class="num small ${cls(pl(r))}">${pl(r) != null ? signKr(pl(r)) : '<span class="faint">saknar inköpspris</span>'}</div>
-      <div class="row" style="margin-top:6px;gap:4px">${actions(r)}</div></div></div>`).join("")}</div>`;
+    return `<div class="cards">${rows.map(r => { const p = pl(r); return `<div class="card inv-card" style="--rc:${esc(r.rc)};${r.it.hidden ? "opacity:.5" : ""}">
+      <div class="im"><img loading="lazy" src="${esc(imgUrl(r.img, "256fx192f"))}" alt="" width="256" height="192">
+        <label class="ck"><input type="checkbox" data-sel="${esc(r.it.id)}" ${sel.has(r.it.id) ? "checked" : ""} aria-label="Markera"></label>
+        <span class="corner tl">${r.wear ? esc(r.wear) : ""}${r.st ? " ST™" : ""}${r.qty > 1 ? `${r.wear ? " · " : ""}×${r.qty}` : ""}</span>
+        ${p != null ? `<span class="corner br ${cls(p)}">${signKr(p)}</span>` : ""}</div><div class="bar"></div>
+      <div class="bd">${nameBlock(r)}<div class="pr num">${valCell(r)}</div><div class="row spread" style="margin-top:6px;gap:4px"><span class="small">${r.unitCost == null ? `<button class="linkbtn" data-a="cost" data-id="${esc(r.it.id)}">+ Inköpspris</button>` : `<span class="faint">inköpt ${kr(r.unitCost)}</span>`}</span><span style="white-space:nowrap">${starBtn(r)} ${menuBtn(r)}</span></div></div></div>`; }).join("")}</div>`;
   }
   draw();
 }
@@ -225,7 +287,7 @@ function tradesTab(body, trades) {
   body.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", async () => { if (await confirmBox("Ta bort transaktionen? Vinstberäkningen räknas om.", { ok: "Ta bort", danger: true })) { await del("trades", b.dataset.del); rerender(); } }));
   $("#expCsv", body).addEventListener("click", () => trades.length ? download("cs2hub-transaktioner.csv", tradesToCsv(trades), "text/csv;charset=utf-8") : toast("Inga transaktioner att exportera"));
   $("#impCsv", body).addEventListener("change", async e => { try { const r = await importCsv(await e.target.files[0].text()); toast(`${r.added} transaktioner importerade${r.skipped ? `, ${r.skipped} rader hoppades över` : ""}`); rerender(); } catch (err) { toast("Kunde inte läsa CSV: " + err.message); } });
-  $("#exp", body).addEventListener("click", async () => download("cs2hub-backup.json", JSON.stringify(await exportAll())));
+  $("#exp", body).addEventListener("click", async () => { await backupNow(); toast("Backup sparad som fil"); });
   $("#imp", body).addEventListener("change", async e => {
     try { const data = JSON.parse(await e.target.files[0].text()); if (!await confirmBox("Detta ersätter all lokal data (inventory, transaktioner, loadouts m.m.). Fortsätta?", { ok: "Ersätt", danger: true })) return; await importAll(data); toast("Backup återställd"); rerender(); } catch (err) { toast("Kunde inte läsa filen: " + err.message); }
   });
@@ -248,18 +310,18 @@ function profitTab(body, rows, pos, steamMode) {
 }
 
 /* ============================ Analys ============================ */
-function analysisTab(body, rows, t, steamMode) {
+function analysisTab(body, rows, t, steamMode, charts = "") {
   const vis = rows.filter(r => !r.it.hidden);
   const val = r => (steamMode ? r.vSteam : r.vCash) ?? 0, pl = r => steamMode ? r.plSteam : r.plCash;
   const total = vis.reduce((s, r) => s + val(r), 0);
-  if (!vis.length || !total) { body.innerHTML = emptyState("Inget att analysera än", "Analysen visas när du har värderade föremål i ditt inventory."); return; }
+  if (!vis.length || !total) { body.innerHTML = charts + emptyState("Inget att analysera än", "Analysen visas när du har värderade föremål i ditt inventory."); return; }
   const top = [...vis].sort((a, b) => val(b) - val(a)), top5 = top.slice(0, 5).reduce((s, r) => s + val(r), 0);
   const bar = (label, v, sub = "") => `<div style="margin-bottom:9px"><div class="row spread small"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</span><span class="num">${kr(v)} <span class="faint">${dec(v / total * 100, 1)} %</span></span></div><div style="height:4px;background:var(--line);border-radius:2px;margin-top:4px"><div style="height:4px;width:${Math.min(100, v / total * 100).toFixed(1)}%;background:#8a9099;border-radius:2px"></div></div>${sub}</div>`;
   const withCost = vis.filter(r => r.cost && pl(r) != null).map(r => ({ r, p: pl(r), pc: pl(r) / r.cost * 100 }));
   const win = [...withCost].sort((a, b) => b.pc - a.pc).slice(0, 5), lose = [...withCost].sort((a, b) => a.pc - b.pc).slice(0, 5);
   const byRar = {}; vis.forEach(r => { const k = r.rarity || "Okänd"; byRar[k] = (byRar[k] || 0) + val(r); });
   const line = x => `<div class="row spread small" style="padding:5px 0;border-bottom:1px solid var(--line)"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.r.e?.p || x.r.name)}</span><span class="num ${cls(x.p)}">${signKr(x.p)} <span class="faint">${pct(x.pc)}</span></span></div>`;
-  body.innerHTML = `<div class="grid cols-2 keep1" style="grid-template-columns:repeat(auto-fit,minmax(min(360px,100%),1fr))">
+  body.innerHTML = charts + `<div class="grid cols-2 keep1" style="grid-template-columns:repeat(auto-fit,minmax(min(360px,100%),1fr))">
     <div class="panel"><h2>Vad står för värdet?</h2><p class="muted small" style="margin-top:0">De fem största innehaven är <b>${dec(top5 / total * 100, 0)} %</b> av hela värdet (${kr(total)}).</p>${top.slice(0, 10).map(r => bar(esc((r.e?.p || r.name) + (r.qty > 1 ? ` ×${r.qty}` : "")), val(r))).join("")}</div>
     <div class="panel"><h2>Värde per rarity</h2>${Object.entries(byRar).sort((a, b) => b[1] - a[1]).map(([k, v]) => bar(esc(k), v)).join("")}</div>
     <div class="panel"><h2>Bästa investeringar</h2>${win.length ? win.map(line).join("") : '<div class="muted small">Registrera inköp för att se vinst per föremål.</div>'}</div>

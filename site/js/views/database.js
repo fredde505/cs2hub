@@ -147,7 +147,8 @@ function priceOverview(e) {
     ${mini("Du får ut (netto)", net ? krUsd(net) : "–", "efter avgift, riktiga pengar")}
     ${mini("Steam Market", steam ? krUsd(steam) : "–", "Steam-krediter")}
     ${stMin < Infinity ? mini("StatTrak™ från", krUsd(stMin)) : ""}${svMin < Infinity ? mini("Souvenir från", krUsd(svMin)) : ""}</div>
-    <div class="muted small" style="margin-top:10px">Pris = lägsta utropspris (listning), inte genomförd försäljning. Prisdata från ${esc(when)}.${stale ? ' <b class="neg">Priserna kan vara gamla.</b>' : ""}</div></div>`;
+    <div class="muted small" style="margin-top:10px">Pris = lägsta utropspris (listning), inte genomförd försäljning. Prisdata från ${esc(when)}.${stale ? ' <b class="neg">Priserna kan vara gamla.</b>' : ""}</div>
+    ${/^(Gamma )?Doppler$/.test(e.p || "") ? `<div class="small" style="margin-top:8px;color:#d9b36a">⚠ Prisdatan skiljer inte på Doppler-faser. Priset gäller modellen i stort (i praktiken den billigaste fasen) – <b>Ruby, Sapphire, Black Pearl och Emerald är ofta värda mycket mer</b>. Kolla fasens egna pris hos marknadsplatsen innan du köper eller säljer.</div>` : ""}</div>`;
 }
 
 function detailRows(e) {

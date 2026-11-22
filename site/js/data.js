@@ -1,5 +1,6 @@
 import { getKV, setKV } from "./store.js";
 import { setRate, fx, WEAR_LONG, WEARS } from "./util.js";
+import { PRICES_URL } from "./config.js";
 
 export const D = {
   skins: [], stickers: [], other: [], collections: [], catalog: [],
@@ -40,7 +41,10 @@ export async function loadData(onStatus = () => { }) {
     json("data/collections.json"), json("data/prices.json").catch(() => null),
   ]);
   D.skins = skins; D.stickers = stickers; D.other = other; D.collections = collections;
-  if (prices) { D.P = prices; D.priceAge = prices.t * 1000; applyTrend(); }
+  if (prices) { D.P = prices; D.priceAge = prices.t * 1000; }
+  // Färskare prissnapshot från förra besöket (hämtad från grenen "prices") går före den inbyggda filen
+  try { const c = await getKV("pricesCache"); if (c?.data?.p && c.data.t > (D.P.t || 0)) { D.P = c.data; D.priceAge = c.data.t * 1000; } } catch { /* ignorera */ }
+  applyTrend();
   for (const c of collections) D.colById.set(c.id, c);
 
   const cat = [];
@@ -208,14 +212,19 @@ export async function refreshLive(onStatus = () => { }, force = false) {
     }
     setRate(c.rate); fx.updated = c.t;
   } catch { const c = await getKV("fx"); if (c) { setRate(c.rate); fx.updated = c.t; } }
-  // Priser: ingen extern prisleverantör anropas från webbläsaren (de saknar CORS). Prisfilen byggs
-  // dagligen statiskt (tools/build_data.py --prices) – vi hämtar den färskt och faller tillbaka på cachen.
+  // Priser: ingen prisleverantör anropas från webbläsaren (de saknar CORS). GitHub Actions publicerar en färsk snapshot
+  // på grenen "prices" (en enda commit, så repot växer inte). Den hämtas högst en gång i timmen och cachas lokalt.
+  // Reserv: den inbyggda data/prices.json.
+  const take = async j => { if (j?.p && j.t * 1000 > D.priceAge) { D.P = j; D.priceAge = j.t * 1000; resetPriceCache(); await setKV("pricesCache", { t: j.t, data: j }); return true; } return false; };
   try {
-    // filen laddades nyss i loadData – hämta bara igen om snapshoten är äldre än 6 timmar (t.ex. sida som varit öppen länge)
-    if (!force && Date.now() - D.priceAge < 6 * 3600e3) throw 0;
-    const j = await fetch("data/prices.json", { cache: "no-cache" }).then(r => r.json());
-    await setKV("pricesMeta", { t: j.t });
-    if (j.t * 1000 > D.priceAge) { D.P = j; D.priceAge = j.t * 1000; resetPriceCache(); }
+    const last = await getKV("pricesFetched", 0);
+    if (force || Date.now() - last > 3600e3) {
+      onStatus("Hämtar färska priser…");
+      let got = false;
+      try { const r = await fetch(PRICES_URL, { cache: "no-cache" }); if (r.ok) { got = true; await take(await r.json()); } } catch { /* grenen saknas eller offline */ }
+      if (!got) { try { await take(await fetch("data/prices.json", { cache: "no-cache" }).then(r => r.json())); } catch { /* behåll det som redan är laddat */ } }
+      if (got) await setKV("pricesFetched", Date.now());
+    }
   } catch { /* behåll det som redan är laddat */ }
   applyTrend();
   D.live = Date.now() - D.priceAge < 36 * 3600e3;

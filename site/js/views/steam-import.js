@@ -70,7 +70,7 @@ async function importSteamJSON(json, steamId) {
   const items = [];
   for (const [mhn, g] of groups) {
     const prev = flags.get(mhn), ref = lookup(mhn);
-    items.push({ id: prev?.id || uid(), mhn, qty: g.qty, source: "steam", fav: prev?.fav, hidden: prev?.hidden, float: prev?.float ?? null, seed: prev?.seed ?? null, added: prev?.added || Date.now(),
+    items.push({ id: prev?.id || uid(), mhn, qty: g.qty, source: "steam", fav: prev?.fav, hidden: prev?.hidden, float: prev?.float ?? null, seed: prev?.seed ?? null, added: prev?.added || Date.now(), nm: g.d.marketable === 0 || g.d.marketable === false,
       name: ref ? undefined : mhn, img: ref ? undefined : g.d.icon_url, kind: ref ? undefined : guessKind(g.d), rc: ref ? undefined : (g.d.name_color ? "#" + g.d.name_color : undefined) });
   }
   await putMany("items", items);

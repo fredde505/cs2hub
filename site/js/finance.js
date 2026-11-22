@@ -10,6 +10,9 @@ export async function loadState() {
 }
 
 const has = v => v != null && v !== "" && Number.isFinite(+v);
+// Föremål som aldrig går att sälja på en marknad (medaljer, märken, mynt …) – de har inget pris och räknas inte som "pris saknas".
+const NON_MARKET = /Service Medal|Season .*Medal|\bMedal$|Global Offensive Badge|\bBadge$|Veteran Coin|\bCoin$|Storage Unit|C4 Explosive|Collectible Pin|Premier Season/i;
+export const isNotSellable = it => !!it.nm || NON_MARKET.test(it.mhn || "");
 /** Nyckel för position: market_hash_name, plus float och seed när de finns (unikt föremål). */
 export const posKey = (mhn, float, seed) => has(float) ? `${mhn}#${(+float).toFixed(5)}${has(seed) ? "#" + +seed : ""}` : mhn;
 
@@ -64,7 +67,9 @@ export function buildRows(items, trades) {
       rarity: e?.r || "", c1: e?.c1 || null, c2: e?.c2 || null,
       weapon: e?.w || "", wear: ref?.wear || null, st: !!ref?.st,
       float: has(it.float) ? +it.float : null, seed: has(it.seed) ? +it.seed : null,
-      steam, cash, vSteam, vCash, unitCost, cost, noPrice: steam == null && cash == null,
+      steam, cash, vSteam, vCash, unitCost, cost,
+      notSellable: steam == null && cash == null && isNotSellable(it),
+      noPrice: steam == null && cash == null && !isNotSellable(it),
       plSteam: cost != null && vSteam != null ? vSteam - cost : null,
       plCash: cost != null && vCash != null ? vCash - cost : null,
     };
@@ -73,11 +78,12 @@ export function buildRows(items, trades) {
 }
 
 export function totals(rows, pos) {
-  const t = { steam: 0, cash: 0, cost: 0, byKind: {}, count: 0, unrealizedSteam: 0, unrealizedCash: 0, unpriced: 0, unpricedItems: 0, withCost: 0, withoutCost: 0 };
+  const t = { steam: 0, cash: 0, cost: 0, byKind: {}, count: 0, unrealizedSteam: 0, unrealizedCash: 0, unpriced: 0, unpricedItems: 0, notSellable: 0, withCost: 0, withoutCost: 0 };
   for (const r of rows) {
     if (r.it.hidden) continue;
     t.count += r.qty;
     if (r.noPrice) { t.unpriced += r.qty; t.unpricedItems++; }
+    if (r.notSellable) t.notSellable++;
     t.steam += r.vSteam || 0; t.cash += r.vCash || 0;
     if (r.cost != null) {
       t.withCost++; t.cost += r.cost;
