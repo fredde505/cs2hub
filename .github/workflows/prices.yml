@@ -1,0 +1,20 @@
+name: Uppdatera priser
+on:
+  schedule: [{ cron: "17 */6 * * *" }]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  prices:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: python tools/build_data.py --prices
+      - run: |
+          git config user.name "price-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add site/data/prices.json
+          git commit -m "Uppdatera priser" || exit 0
+          git push
