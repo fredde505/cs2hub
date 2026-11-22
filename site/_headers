@@ -1,0 +1,8 @@
+/js/*
+  Cache-Control: public, max-age=300
+/css/*
+  Cache-Control: public, max-age=300
+/data/*
+  Cache-Control: public, max-age=900
+/sw.js
+  Cache-Control: no-cache

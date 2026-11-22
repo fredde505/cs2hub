@@ -1,0 +1,93 @@
+// Vinstmotor: varje köp och försäljning är en egen händelse. Kostnad räknas med glidande genomsnittligt inköpspris (GAV).
+// Föremål med egen float/seed är egna positioner och blandas inte ihop med andra av samma skin.
+import { all } from "./store.js";
+import { steamUsd, cashUsd, bestUsd, lookup } from "./data.js";
+import { usd2sek } from "./util.js";
+
+export async function loadState() {
+  const [items, trades] = await Promise.all([all("items"), all("trades")]);
+  return { items, trades };
+}
+
+const has = v => v != null && v !== "" && Number.isFinite(+v);
+/** Nyckel för position: market_hash_name, plus float och seed när de finns (unikt föremål). */
+export const posKey = (mhn, float, seed) => has(float) ? `${mhn}#${(+float).toFixed(5)}${has(seed) ? "#" + +seed : ""}` : mhn;
+
+/** Räknar positioner ur transaktionsloggen (kronor). */
+export function positions(trades) {
+  const pos = new Map();
+  const sorted = [...trades].sort((a, b) => a.date - b.date || a.created - b.created);
+  for (const t of sorted) {
+    const key = posKey(t.mhn, t.float, t.seed);
+    const p = pos.get(key) || { key, mhn: t.mhn, float: has(t.float) ? +t.float : null, seed: has(t.seed) ? +t.seed : null, qty: 0, cost: 0, realized: 0, realizedSteam: 0, realizedCash: 0, bought: 0, sold: 0, fees: 0, buys: 0, sells: 0, proceeds: 0, firstBuy: null };
+    const q = +t.qty || 1, price = +t.price || 0, fee = +t.fee || 0;
+    p.fees += fee;
+    if (t.type === "buy") {
+      p.qty += q; p.cost += price * q + fee; p.bought += q; p.buys++;
+      if (p.firstBuy == null) p.firstBuy = t.date;
+    } else {
+      const avg = p.qty > 0 ? p.cost / p.qty : 0;
+      const covered = Math.min(q, p.qty);
+      const proceeds = price * q - fee;
+      const gain = proceeds - avg * covered; // oregistrerat överskott räknas utan kostnadsbas
+      p.realized += gain;
+      if (t.pay === "steam") p.realizedSteam += gain; else p.realizedCash += gain;
+      p.proceeds += proceeds;
+      p.cost -= avg * covered; p.qty -= covered; p.sold += q; p.sells++;
+    }
+    pos.set(key, p);
+  }
+  for (const p of pos.values()) p.avg = p.qty > 0 ? p.cost / p.qty : (p.bought ? 0 : null);
+  return pos;
+}
+
+/** Bygger rader för inventoryt med värde (Steam / riktiga pengar), kostnad och vinst. */
+export function buildRows(items, trades) {
+  const pos = positions(trades);
+  const rows = items.map(it => {
+    const ref = lookup(it.mhn);
+    const e = ref?.e;
+    const key = posKey(it.mhn, it.float, it.seed);
+    let p = pos.get(key), approx = false;
+    if (!p && key !== it.mhn) { p = pos.get(it.mhn); approx = !!p; } // reserv: köp registrerade utan float
+    const qty = Math.max(1, Math.floor(+it.qty) || 1);
+    const steam = usd2sek(steamUsd(it.mhn) ?? bestUsd(it.mhn));
+    const cash = usd2sek(cashUsd(it.mhn));
+    const unitCost = p && p.avg != null && p.bought ? p.avg : null;
+    const cost = unitCost != null ? unitCost * qty : null;
+    const vSteam = steam != null ? steam * qty : null;
+    const vCash = cash != null ? cash * qty : null;
+    return {
+      it, e, ref, qty, mhn: it.mhn, key, costApprox: approx,
+      name: e?.n || it.name || it.mhn, img: e?.img || it.img || "",
+      kind: e?.kind || it.kind || "other", rc: e?.rc || it.rc || "#666",
+      rarity: e?.r || "", c1: e?.c1 || null, c2: e?.c2 || null,
+      weapon: e?.w || "", wear: ref?.wear || null, st: !!ref?.st,
+      float: has(it.float) ? +it.float : null, seed: has(it.seed) ? +it.seed : null,
+      steam, cash, vSteam, vCash, unitCost, cost, noPrice: steam == null && cash == null,
+      plSteam: cost != null && vSteam != null ? vSteam - cost : null,
+      plCash: cost != null && vCash != null ? vCash - cost : null,
+    };
+  });
+  return { rows, pos };
+}
+
+export function totals(rows, pos) {
+  const t = { steam: 0, cash: 0, cost: 0, byKind: {}, count: 0, unrealizedSteam: 0, unrealizedCash: 0, unpriced: 0, unpricedItems: 0, withCost: 0, withoutCost: 0 };
+  for (const r of rows) {
+    if (r.it.hidden) continue;
+    t.count += r.qty;
+    if (r.noPrice) { t.unpriced += r.qty; t.unpricedItems++; }
+    t.steam += r.vSteam || 0; t.cash += r.vCash || 0;
+    if (r.cost != null) {
+      t.withCost++; t.cost += r.cost;
+      if (r.vSteam != null) t.unrealizedSteam += r.vSteam - r.cost;
+      if (r.vCash != null) t.unrealizedCash += r.vCash - r.cost;
+    } else t.withoutCost++;
+    const k = t.byKind[r.kind] || (t.byKind[r.kind] = { steam: 0, cash: 0, qty: 0 });
+    k.steam += r.vSteam || 0; k.cash += r.vCash || 0; k.qty += r.qty;
+  }
+  t.realized = 0; t.realizedSteam = 0; t.realizedCash = 0; t.fees = 0;
+  for (const p of pos.values()) { t.realized += p.realized; t.realizedSteam += p.realizedSteam; t.realizedCash += p.realizedCash; t.fees += p.fees; }
+  return t;
+}

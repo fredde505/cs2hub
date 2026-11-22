@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111214">
+<title>CS2 Hub</title>
+<meta name="description" content="Gratis CS2-plattform: inventory, vinstspårning, skin-databas och färgutforskare.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23181a1d'/%3E%3Cpath d='M9 22V10h6.5a3.5 3.5 0 0 1 0 7H12' fill='none' stroke='%23e8eaed' stroke-width='2.4'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side" id="side">
+    <a class="brand" href="#/overview"><span class="mark">CS</span><span>2 Hub</span></a>
+    <nav id="nav"></nav>
+    <div class="side-foot">
+      <label class="muted small" for="priceMode" style="display:block;margin-bottom:4px">Prisvisning</label>
+      <select class="inp" id="priceMode" style="width:100%;margin-bottom:10px"><option value="market">Lägsta marknadspris</option><option value="steam">Steam Market-pris</option></select>
+      <div class="muted small" id="priceStatus">Priser laddas…</div>
+      <div class="muted small" id="rateStatus"></div>
+    </div>
+  </aside>
+  <main class="main">
+    <header class="top">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="Meny">☰</button>
+      <div class="top-title" id="topTitle"></div>
+      <div class="top-actions">
+        <input class="search" id="globalSearch" type="search" placeholder="Sök i databasen…" autocomplete="off">
+      </div>
+    </header>
+    <div id="view" class="view"></div>
+  </main>
+</div>
+<nav class="tabbar" id="tabbar"></nav>
+<div id="modalRoot"></div>
+<div id="toast" class="toast" hidden></div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
