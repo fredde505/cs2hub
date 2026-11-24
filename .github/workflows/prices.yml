@@ -22,11 +22,15 @@ jobs:
         run: |
           set -e
           mkdir /tmp/pub && cp site/data/prices.json /tmp/pub/
+          # Prishistorik: hämta förra versionen från grenen "prices" och lägg till dagens priser
+          git fetch -q --depth=1 origin prices || true
+          git show FETCH_HEAD:history.json > /tmp/history_prev.json 2>/dev/null || echo '{}' > /tmp/history_prev.json
+          python tools/history.py site/data/prices.json /tmp/history_prev.json /tmp/pub/history.json
           cd /tmp/pub
           git init -q -b prices
           git config user.name "price-bot"
           git config user.email "bot@users.noreply.github.com"
-          git add prices.json
+          git add prices.json history.json
           git commit -q -m "Prissnapshot $(date -u +%Y-%m-%dT%H:%MZ)"
           git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
           git push -q -f origin prices
