@@ -43,7 +43,7 @@ export function renderMarket(root) {
     moves.push({ mhn, now: ext, ch7, ch30 });
   }
   const up = [...moves].sort((a, b) => b.ch7 - a.ch7).slice(0, 15), down = [...moves].sort((a, b) => a.ch7 - b.ch7).slice(0, 15);
-  const tbl = rows => `<div class="scroll-x"><table class="tbl"><thead><tr><th>Föremål</th><th class="r">Pris</th><th class="r">7 d</th><th class="r hide-m">30 d</th></tr></thead><tbody>${rows.map(r => {
+  const tbl = rows => `<div class="scroll-x"><table class="tbl"><thead><tr><th>Föremål</th><th class="r">Pris</th><th class="r" title="Steams senaste 24 h-snitt mot 7-dagarssnittet">Mot 7 d-snitt</th><th class="r hide-m" title="Steams senaste 24 h-snitt mot 30-dagarssnittet">Mot 30 d-snitt</th></tr></thead><tbody>${rows.map(r => {
     const e = lookup(r.mhn)?.e;
     return `<tr><td><div class="nm">${e ? `<img loading="lazy" src="${esc(imgUrl(e.img, "96fx72f"))}" alt="" width="56" height="42">` : ""}<a class="n2" href="${e ? "#/item/" + esc(e.id) : "#"}">${esc(r.mhn)}</a></div></td><td class="r num">${kr(usd2sek(r.now))}</td><td class="r num ${cls(r.ch7)}">${pct(r.ch7)}</td><td class="r num hide-m ${cls(r.ch30)}">${pct(r.ch30)}</td></tr>`;
   }).join("")}</tbody></table></div>`;

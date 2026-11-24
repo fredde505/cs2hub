@@ -1,7 +1,7 @@
 // Underhåll i bakgrunden: "ny version finns", gamla priser och påminnelse om backup.
-import { $, toast, download, fmtDateTime, ago } from "./util.js";
+import { $, toast, download, fmtDateTime, ago, esc, kr, usd2sek } from "./util.js";
 import { all, getKV, setKV, exportAll } from "./store.js";
-import { D } from "./data.js";
+import { D, bestUsd } from "./data.js";
 
 const bar = (id, html) => {
   let el = document.getElementById(id);
@@ -9,6 +9,14 @@ const bar = (id, html) => {
   el.innerHTML = html; el.hidden = false; return el;
 };
 const hide = id => { const el = document.getElementById(id); if (el) el.hidden = true; };
+
+/** Visas när bevakade föremål nått målpriset sedan sist (även om webbläsarnotiser inte är påslagna). */
+export function watchBanner(hits) {
+  if (!hits.length) return;
+  const names = hits.slice(0, 3).map(w => `${w.mhn} (${kr(usd2sek(bestUsd(w.mhn)))})`).join(", ") + (hits.length > 3 ? ` och ${hits.length - 3} till` : "");
+  const el = bar("watchBanner", `☆ ${hits.length === 1 ? "Ett bevakat föremål har" : hits.length + " bevakade föremål har"} nått målpriset: ${esc(names)}. <a href="#/watchlist" style="text-decoration:underline;margin-left:6px">Visa bevakningar</a> <button class="btn ghost sm" id="wbX" style="margin-left:8px">Stäng</button>`);
+  el.querySelector("#wbX").addEventListener("click", () => hide("watchBanner"));
+}
 
 /* ---- Ny version: version.txt skrivs av Cloudflare-bygget; ändras den medan sidan är öppen erbjuds omladdning ---- */
 export function initUpdateCheck() {

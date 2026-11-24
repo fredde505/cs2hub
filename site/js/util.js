@@ -36,9 +36,27 @@ export const krUsdm = v => krm(usd2sek(v));
 export const pct = v => v == null || !isFinite(v) ? "–" : (v > 0 ? "+" : "") + dec(v, 1) + " %";
 export const signKr = v => v == null || isNaN(v) ? "–" : (v > 0 ? "+" : v < 0 ? "−" : "") + kr(Math.abs(v));
 export const cls = v => v > 0.005 ? "pos" : v < -0.005 ? "neg" : "";
-export const fmtDate = ts => new Date(ts).toLocaleDateString("sv-SE");
-export const fmtDateTime = ts => new Date(ts).toLocaleString("sv-SE", { dateStyle: "short", timeStyle: "short" });
+const validTs = ts => ts != null && ts !== "" && isFinite(new Date(ts).getTime());
+export const fmtDate = ts => validTs(ts) ? new Date(ts).toLocaleDateString("sv-SE") : "–";
+export const fmtDateTime = ts => validTs(ts) ? new Date(ts).toLocaleString("sv-SE", { dateStyle: "short", timeStyle: "short" }) : "–";
 export const num = (v, d = 4) => dec(v, d);
+/** Läser tal som människor skriver dem: "1 234,50", "12.5 kr", "3,12". Ger null om det inte går att tolka. */
+export function parseDec(s) {
+  if (s == null) return null;
+  let t = String(s).replace(/kr|sek|:-|\s| | /gi, "");
+  if (!/^-?[\d.,]+$/.test(t)) return null;
+  const lc = t.lastIndexOf(","), ld = t.lastIndexOf("."), last = Math.max(lc, ld);
+  if (last >= 0) {
+    const sep = t[last], other = sep === "," ? "." : ",";
+    const after = t.length - last - 1, sepCount = t.split(sep).length - 1;
+    // Sista tecknet är decimaltecken om det finns båda sorterna (3,595.74 / 3.595,74), eller om det är det enda tecknet och har högst 2 decimaler
+    // ("3,5", "12.50"). Tre siffror efter ett ensamt tecken ("3,595") eller upprepade tecken ("1.234.567") är tusentalsavskiljare.
+    const isDecimal = t.includes(other) ? t.lastIndexOf(sep) > t.lastIndexOf(other) && sepCount === 1 : sepCount === 1 && after > 0 && after <= 2;
+    t = isDecimal ? t.slice(0, last).replace(/[.,]/g, "") + "." + t.slice(last + 1) : t.replace(/[.,]/g, "");
+  }
+  if (!/^-?\d*\.?\d+$/.test(t)) return null;
+  const v = parseFloat(t); return isFinite(v) ? v : null;
+}
 /** "för 3 timmar sedan" */
 export function ago(ts) {
   const m = Math.max(0, Math.round((Date.now() - ts) / 60000));
@@ -55,14 +73,26 @@ export function toast(msg) {
 
 export function modal(html, { wide = false, onMount } = {}) {
   const root = $("#modalRoot");
-  root.innerHTML = `<div class="modal-back"><div class="modal ${wide ? "wide" : ""}" role="dialog">${html}</div></div>`;
-  const back = root.firstElementChild;
-  const close = () => { root.innerHTML = ""; document.removeEventListener("keydown", onKey); };
-  const onKey = e => e.key === "Escape" && close();
+  const opener = document.activeElement;
+  root.innerHTML = `<div class="modal-back"><div class="modal ${wide ? "wide" : ""}" role="dialog" aria-modal="true" aria-label="Dialog">${html}</div></div>`;
+  const back = root.firstElementChild, box = root.querySelector(".modal");
+  const h = box.querySelector("h3"); if (h) box.setAttribute("aria-label", h.textContent);
+  const close = () => { root.innerHTML = ""; document.removeEventListener("keydown", onKey); try { opener?.isConnected && opener.focus?.({ preventScroll: true }); } catch { /* ignorera */ } };
+  const onKey = e => {
+    if (e.key === "Escape") return close();
+    if (e.key !== "Tab") return; // fokusfälla: Tab stannar i dialogen
+    const f = [...box.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]):not([type=hidden]),select,textarea,summary,[tabindex]:not([tabindex="-1"])')].filter(x => x.offsetParent !== null);
+    if (!f.length) return;
+    const first = f[0], last = f[f.length - 1];
+    if (!box.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+    else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  };
   document.addEventListener("keydown", onKey);
   back.addEventListener("mousedown", e => { if (e.target === back) close(); });
   root.querySelectorAll("[data-close]").forEach(b => b.addEventListener("click", close));
-  onMount && onMount(root.querySelector(".modal"), close);
+  onMount && onMount(box, close);
+  if (!box.contains(document.activeElement)) (box.querySelector("input:not([type=hidden]),select,button.btn:not(.ghost),button") || box).focus?.({ preventScroll: true });
   return close;
 }
 
@@ -128,6 +158,34 @@ export function lineChart(points, { w = 640, h = 180, fmt = v => nf0.format(v), 
     <text x="${w - pad.r}" y="${pad.t + 8}" text-anchor="end">${esc(fmt(ys1))}</text>
     <text x="${w - pad.r}" y="${h - pad.b - 3}" text-anchor="end">${esc(fmt(ys0))}</text>
   </svg><div class="muted small" style="margin-top:4px">Från ${fmtDate(x0)} · ${change >= 0 ? "+" : "−"}${esc(fmt(Math.abs(change)))} sedan start · håll muspekaren över en punkt för detaljer</div>`;
+}
+
+/** Graf med flera linjer och (valfritt) lodräta markeringar för t.ex. köp och försäljningar. series: [{name,color,dash?,pts:[{x,y}]}], marks: [{x,type:"buy"|"sell",tip}] */
+export function multiChart(series, { w = 640, h = 210, fmt = v => nf0.format(v), marks = [], since = null } = {}) {
+  const live = series.filter(s => s.pts && s.pts.length);
+  const longest = Math.max(0, ...live.map(s => s.pts.length));
+  if (longest < 2) return `<div class="empty small">${since ? `Historiken börjar ${fmtDate(since)}. ` : ""}Grafen visas när det finns minst två mätpunkter – en sparas automatiskt ungefär var 6:e timme du öppnar sidan.</div>`;
+  const pad = { l: 8, r: 8, t: 12, b: 26 };
+  const xs = live.flatMap(s => s.pts.map(p => p.x)), ys = live.flatMap(s => s.pts.map(p => p.y));
+  const x0 = Math.min(...xs), x1 = Math.max(...xs); let y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const span = (y1 - y0) || Math.max(1, Math.abs(y1) * 0.1); y0 -= span * 0.08; y1 += span * 0.08;
+  const X = x => pad.l + (x1 === x0 ? 0.5 : (x - x0) / (x1 - x0)) * (w - pad.l - pad.r);
+  const Y = y => pad.t + (1 - (y - y0) / (y1 - y0)) * (h - pad.t - pad.b);
+  const f1 = v => v.toFixed(1), lbl = t => new Date(t).toLocaleDateString("sv-SE", { day: "numeric", month: "short" });
+  const paths = live.map((s, k) => {
+    const d = s.pts.map((p, i) => (i ? "L" : "M") + f1(X(p.x)) + " " + f1(Y(p.y))).join("");
+    const step = Math.max(1, Math.ceil(s.pts.length / 100));
+    const dots = k === 0 ? s.pts.filter((_, i) => i % step === 0 || i === s.pts.length - 1).map(p => `<circle class="hov" cx="${f1(X(p.x))}" cy="${f1(Y(p.y))}" r="7"><title>${esc(fmtDateTime(p.x))}: ${esc(s.name)} ${esc(fmt(p.y))}</title></circle>`).join("") : "";
+    return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${k === 0 ? 1.8 : 1.4}" ${s.dash ? `stroke-dasharray="${s.dash}"` : ""} stroke-linejoin="round"/>${dots}`;
+  }).join("");
+  const mk = marks.filter(m => m.x >= x0 && m.x <= x1).map(m => `<line x1="${f1(X(m.x))}" x2="${f1(X(m.x))}" y1="${h - pad.b - 9}" y2="${h - pad.b}" stroke="${m.type === "sell" ? "#d8645a" : "#5fb06c"}" stroke-width="2"><title>${esc(m.tip || (m.type === "sell" ? "Försäljning" : "Köp"))}</title></line>`).join("");
+  const legend = live.map(s => `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:12px"><i style="display:inline-block;width:14px;height:0;border-top:2px ${s.dash ? "dashed" : "solid"} ${s.color}"></i>${esc(s.name)}</span>`).join("");
+  return `<svg class="chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(live.map(s => s.name).join(" och "))} över tid">
+    ${[0, .5, 1].map(f => `<line x1="${pad.l}" x2="${w - pad.r}" y1="${pad.t + f * (h - pad.t - pad.b)}" y2="${pad.t + f * (h - pad.t - pad.b)}" stroke="#2a2d33"/>`).join("")}
+    ${paths}${mk}
+    <text x="${pad.l}" y="${h - 5}">${lbl(x0)}</text><text x="${w - pad.r}" y="${h - 5}" text-anchor="end">${lbl(x1)}</text>
+    <text x="${w - pad.r}" y="${pad.t + 8}" text-anchor="end">${esc(fmt(y1))}</text><text x="${w - pad.r}" y="${h - pad.b - 12}" text-anchor="end">${esc(fmt(y0))}</text></svg>
+    <div class="muted small" style="margin-top:4px">${legend}${marks.length ? `<span style="color:#5fb06c">▎köp</span> <span style="color:#d8645a">▎sälj</span>` : ""}</div>`;
 }
 
 export function sparkline(vals, w = 90, h = 24, color = "#8a9099") {

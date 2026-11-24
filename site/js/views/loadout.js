@@ -3,6 +3,7 @@ import { all, put, del } from "../store.js";
 import { D, mhnFor, bestUsd, priceInfo, priceTip } from "../data.js";
 import { pageHead, dispName, emptyState, priceNote } from "./common.js";
 import { encodeShare, decodeShare } from "./share.js";
+import { openCardModal } from "./card.js";
 
 /* Riktiga CS2-platser: varje vapen har sin egen skin per sida. Kniv, handskar och agent är egna platser. */
 const SIDE = { ct: "counter-terrorists", t: "terrorists" };
@@ -84,7 +85,7 @@ function draw() {
     <div class="seg" id="sideSeg"><button data-s="ct" class="${cur.side === "ct" ? "on" : ""}">Counter-Terrorist</button><button data-s="t" class="${cur.side === "t" ? "on" : ""}">Terrorist</button></div>
     <input class="inp" id="nm" value="${esc(cur.name)}" style="min-width:180px" aria-label="Namn på loadout">
     <select class="inp" id="sv" aria-label="Sparade loadouts"><option value="">Sparade loadouts (${saved.length})</option>${saved.map(s => `<option value="${esc(s.id)}" ${s.id === cur.id ? "selected" : ""}>${esc(s.name)} · ${s.side.toUpperCase()}</option>`).join("")}</select>
-    <button class="btn" id="save">Spara</button><button class="btn ghost" id="new">Ny</button><button class="btn ghost" id="dup">Spara som kopia</button>${isSaved ? `<button class="btn ghost danger" id="rm">Ta bort</button>` : ""}<button class="btn ghost" id="shr">Dela</button>
+    <button class="btn" id="save">Spara</button><button class="btn ghost" id="new">Ny</button><button class="btn ghost" id="dup">Spara som kopia</button>${isSaved ? `<button class="btn ghost danger" id="rm">Ta bort</button>` : ""}<button class="btn ghost" id="shr">Dela</button><button class="btn ghost" id="shimg">Dela som bild</button>
   </div>
   <div class="grid split" style="grid-template-columns:minmax(0,3fr) minmax(0,1.25fr);align-items:start">
     <div id="slots">${GROUPS[cur.side].map(([title, keys]) => `<h2 style="margin:18px 0 8px">${esc(title)}</h2><div class="cards">${keys.map(k => slotCard(c.rows.find(r => r.k === k))).join("")}</div>`).join("")}</div>
@@ -112,6 +113,10 @@ function draw() {
   $("#dup", root).addEventListener("click", async () => { cur = { ...structuredClone(cur), id: uid(), name: cur.name + " (kopia)", created: Date.now() }; await persist(); });
   $("#rm", root)?.addEventListener("click", async () => { if (await confirmBox("Ta bort loadouten?", { ok: "Ta bort", danger: true })) { await del("loadouts", cur.id); saved = saved.filter(s => s.id !== cur.id); cur = saved[0] ? structuredClone(saved[0]) : fresh(cur.side); draw(); } });
   $("#shr", root).addEventListener("click", async () => { const url = location.origin + location.pathname + "#/loadout/" + await encodeShare({ name: cur.name, side: cur.side, slots: cur.slots, theme: cur.theme }); copyText(url, "Länk till loadouten kopierad"); });
+  $("#shimg", root).addEventListener("click", () => {
+    const entries = c.rows.filter(r => r.e).map(r => ({ name1: r.e.w || r.e.n, name2: (r.e.p || r.e.n) + (r.e.ph ? " · " + r.e.ph : ""), tag: slotLabel(r.k) + (r.sel?.wear ? " · " + r.sel.wear : ""), price: r.p, img: r.e.img ? imgUrl(r.e.img, "256fx192f") : "", rc: r.e.rc }));
+    openCardModal({ title: cur.name || "Min loadout", entries, total: c.total, defCount: 12, filename: "cs2hub-loadout" });
+  });
   $("#clr", root).addEventListener("click", () => { cur.slots = {}; draw(); });
   $("#theme", root).addEventListener("change", e => { cur.theme = e.target.value; draw(); });
   $("#list", root).addEventListener("click", () => shopList(c));

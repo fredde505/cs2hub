@@ -1,14 +1,14 @@
 // Cache: datafilerna (/data/) visas direkt från cachen och uppdateras i bakgrunden (stale-while-revalidate),
 // appens egna filer hämtas nätverk-först med cache som reserv offline. Bilder från Steam cachas av webbläsaren själv
 // (att lägga dem i Cache Storage skulle fylla lagringskvoten).
-const V = "cs2hub-v2";
+const V = "cs2hub-v3";
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", e => {
   e.waitUntil(caches.keys().then(k => Promise.all(k.filter(x => x !== V).map(x => caches.delete(x)))).then(() => self.clients.claim()));
 });
 self.addEventListener("fetch", e => {
   const u = new URL(e.request.url);
-  if (e.request.method !== "GET" || u.origin !== location.origin) return;
+  if (e.request.method !== "GET" || u.origin !== location.origin || u.pathname.endsWith("/version.txt")) return; // versionskollen ska alltid gå mot servern och får inte cachas
   const isData = u.pathname.includes("/data/");
   e.respondWith(caches.open(V).then(async c => {
     const hit = await c.match(e.request);

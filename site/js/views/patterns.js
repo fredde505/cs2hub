@@ -67,7 +67,7 @@ function blueTab(body) {
   box.querySelector("#more")?.addEventListener("click", () => { S.shown += 25; redraw(); });
   box.querySelector("#cc")?.addEventListener("click", () => { S.cmp.ch = []; redraw(); });
   box.querySelectorAll("[data-c]").forEach(b => b.addEventListener("click", () => { const s = +b.dataset.c; const l = S.cmp.ch; if (!l.includes(s)) { l.push(s); if (l.length > 4) l.shift(); } redraw(); }));
-  function redraw() { const root = body.parentElement; draw(root); }
+  function redraw() { const root = body.parentElement; if (root) draw(root); }
 }
 
 /* ------------------------------ Fade ------------------------------ */
@@ -91,7 +91,7 @@ function fadeTab(body) {
   box.querySelector("#more")?.addEventListener("click", () => { S.shown += 25; redraw(); });
   box.querySelector("#cc")?.addEventListener("click", () => { S.cmp.fade = []; redraw(); });
   box.querySelectorAll("[data-c]").forEach(b => b.addEventListener("click", () => { const s = +b.dataset.c; const l = S.cmp.fade; if (!l.includes(s)) { l.push(s); if (l.length > 4) l.shift(); } redraw(); }));
-  function redraw() { draw(body.parentElement); }
+  function redraw() { if (body.parentElement) draw(body.parentElement); }
 }
 
 /* ------------------------------ Doppler ------------------------------ */

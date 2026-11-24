@@ -1,9 +1,11 @@
 import { $, esc, imgUrl, krUsd, usd2sek, kr, krm, dec, MISSING, WEARS, WEAR_LONG, WEAR_RANGE, COLORS, COLOR_LABEL, rarityOrder, debounce, lineChart, pct, cls, fmtDate, fmtDateTime, ago } from "../util.js";
-import { D, MARKETS, fromPrice, mhnFor, priceRow, pricesByWear, bestUsd, steamUsd, cashUsd, marketUrl, priceInfo, priceTip } from "../data.js";
+import { loadHistory, historyFor, historyDays, D, MARKETS, fromPrice, mhnFor, priceRow, pricesByWear, bestUsd, steamUsd, cashUsd, marketUrl, priceInfo, priceTip } from "../data.js";
 import { itemCard, pageHead, KINDS, KIND_LABEL, priceNote, emptyState } from "./common.js";
 import { addItemModal } from "./inventory.js";
 import { addWatch } from "./watchlist.js";
 import { addToCompare } from "./compare.js";
+import { presetColors } from "./colors.js";
+import { parseQuery } from "../search.js";
 
 const PAGE = 60;
 const F = { kind: "weapon", q: "", weapon: "", rarity: "", tour: "", pmin: "", pmax: "", st: false, sv: false, priced: "", sort: "name" };
@@ -15,6 +17,14 @@ function pool(kind) {
 
 /** Global sök: nollställ filter och hoppa till första kategorin som har träffar. */
 export function searchDatabase(q) {
+  const pq = parseQuery(q);
+  const go = h => { if (location.hash === h) window.dispatchEvent(new HashChangeEvent("hashchange")); else location.hash = h; };
+  if (pq.smart) { // "blå kniv under 3000 kr" → färgfilter hör hemma i Color Explorer, annars databasens filter
+    if (pq.colors.length) { presetColors({ colors: pq.colors, kind: pq.kind || "", pmin: pq.min, pmax: pq.max, q: pq.text }); return go("#/colors"); }
+    q = pq.text; F.kind = pq.kind || F.kind;
+    Object.assign(F, { q, weapon: "", rarity: "", tour: "", pmin: pq.min ?? "", pmax: pq.max ?? "", st: false, sv: false, priced: "" });
+    return go("#/database/" + F.kind);
+  }
   const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
   Object.assign(F, { q, weapon: "", rarity: "", tour: "", pmin: "", pmax: "", st: false, sv: false, priced: "" });
   const hit = KINDS.find(k => k.k !== "collection" && D.catalog.some(e => e.kind === k.k && terms.every(t => (e.n + " " + (e.w || "")).toLowerCase().includes(t))))
@@ -25,7 +35,7 @@ export function searchDatabase(q) {
 }
 
 export function renderList(root, params = {}) {
-  if (params.kind) F.kind = params.kind;
+  if (params.kind) F.kind = KINDS.some(k => k.k === params.kind) ? params.kind : "weapon"; // okänd adress (#/database/abc) → vapenskins
   if (params.q !== undefined) F.q = params.q;
   root.innerHTML = `${pageHead("Database", "Hela CS2:s item-schema – skins, knivar, handskar, stickers, charms, agents, cases, capsules, music kits, patches, graffiti och samlingar.")}
   <div class="tabs" id="kt">${KINDS.map(k => `<button data-k="${k.k}" class="${F.kind === k.k ? "on" : ""}">${k.label}</button>`).join("")}</div>
@@ -121,6 +131,7 @@ export function renderItem(root, id) {
   $("#addInv", root).addEventListener("click", () => addItemModal({ entry: e }));
   $("#addCmp", root).addEventListener("click", () => addToCompare(e.id));
   $("#addWatch", root).addEventListener("click", () => addWatch(isSkin ? mhnFor(e, e.wr[2] || e.wr[0] || null) : e.mh));
+  fillHistory(root, e, isSkin);
   const tg = root.querySelectorAll("[data-st]");
   tg.forEach(b => b.addEventListener("click", () => { root.querySelector("#priceBox").innerHTML = priceTable(e, b.dataset.st === "1"); tg.forEach(x => x.classList.toggle("on", x === b)); }));
 }
@@ -189,20 +200,65 @@ function priceTable(e, st) {
     }).join("")}</tbody></table></div><div class="muted small" style="margin-top:8px">Billigast = lägsta pris bland riktiga marknadsplatser (BUFF163 räknas inte, svårtillgänglig). Steam-priset är oftast högst eftersom Steam-krediter inte går att ta ut. Netto = vad du får efter avgift när du säljer på Skinport eller CSFloat.</div>`;
 }
 
+/** Steam ger oss GENOMSNITT för de senaste 24 h / 7 / 30 / 90 dagarna – inte priset på ett visst datum. Att rita dem som en kurva
+ *  vore missvisande, så vi räknar ut medelpriset för varje separat period (30–90 d, 7–30 d, 1–7 d, senaste 24 h) och visar staplar. */
+function periodChart(tr) {
+  const [a1, a7, a30, a90] = tr;
+  if (!(a7 > 0) || !(a30 > 0) || !(a90 > 0)) return `<div class="empty small">För lite Steam-data för att visa utveckling.</div>`;
+  const bars = [
+    { l: "30–90 d sedan", v: (90 * a90 - 30 * a30) / 60 },
+    { l: "7–30 d sedan", v: (30 * a30 - 7 * a7) / 23 },
+    { l: a1 > 0 ? "1–7 d sedan" : "Senaste 7 d", v: a1 > 0 ? (7 * a7 - a1) / 6 : a7 },
+  ];
+  if (a1 > 0) bars.push({ l: "Senaste 24 h", v: a1 });
+  if (bars.some(b => !(b.v > 0) || !isFinite(b.v))) return `<div class="empty small">Steams snittvärden går inte ihop för det här föremålet (för få försäljningar) – ingen pålitlig utveckling kan visas.</div>`;
+  const w = 640, h = 190, pad = { l: 8, r: 8, t: 22, b: 34 }, n = bars.length, slot = (w - pad.l - pad.r) / n, bw = Math.min(90, slot * 0.6);
+  const top = Math.max(...bars.map(b => b.v)) * 1.08, Y = v => pad.t + (1 - v / top) * (h - pad.t - pad.b);
+  const last = bars[n - 1], prev = bars[n - 2], chg = (last.v / prev.v - 1) * 100;
+  const svg = `<svg class="chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="Medelpris per period på Steam">
+    <line x1="${pad.l}" x2="${w - pad.r}" y1="${h - pad.b}" y2="${h - pad.b}" stroke="#2a2d33"/>
+    ${bars.map((b, i) => { const cx = pad.l + slot * (i + 0.5), y = Y(b.v), isLast = i === n - 1;
+      return `<rect x="${(cx - bw / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${(h - pad.b - y).toFixed(1)}" rx="3" fill="${isLast ? "#e7e9ec" : "#4a4f58"}"><title>${esc(b.l)}: ${esc(kr(usd2sek(b.v)))}</title></rect>
+      <text x="${cx.toFixed(1)}" y="${(y - 6).toFixed(1)}" text-anchor="middle" style="fill:var(--text,#e7e9ec);font-size:11px">${esc(kr(usd2sek(b.v)))}</text>
+      <text x="${cx.toFixed(1)}" y="${h - 14}" text-anchor="middle">${esc(b.l)}</text>`; }).join("")}</svg>`;
+  return `${svg}<div class="muted small" style="margin-top:6px">Medelpris på Steam för varje period (uträknat ur Steams snitt för 24 h, 7, 30 och 90 dagar – det är inte en dagskurva). Senaste perioden ${pct(chg)} mot perioden före. Steam-priser är i Steam-krediter och ligger ofta över marknadspriset.</div>`;
+}
+
+/** Riktig prishistorik (egen insamling, ett värde per dag). Fylls i asynkront av fillHistory. */
+function historyPanel(e, isSkin) {
+  const def = isSkin ? (e.wr.includes("FT") ? "FT" : e.wr[Math.floor(e.wr.length / 2)] || null) : null;
+  return `<div class="panel" id="histPanel"><div class="row spread"><h2 style="margin:0">Prishistorik · lägsta marknadspris</h2>${isSkin && e.wr.length > 1 ? `<select class="inp" id="histWear" aria-label="Slitage för prishistorik">${e.wr.map(w => `<option value="${w}" ${w === def ? "selected" : ""}>${WEAR_LONG[w]}</option>`).join("")}</select>` : ""}</div>
+    <div id="histBox" style="margin-top:10px" class="muted small">Hämtar historik…</div></div>`;
+}
+async function fillHistory(root, e, isSkin) {
+  const box = root.querySelector("#histBox"); if (!box) return;
+  const def = isSkin ? (e.wr.includes("FT") ? "FT" : e.wr[Math.floor(e.wr.length / 2)] || null) : null;
+  const draw = () => {
+    const w = root.querySelector("#histWear")?.value || def, mhn = isSkin ? mhnFor(e, w) : e.mh, pts = historyFor(mhn);
+    if (pts == null) box.innerHTML = historyDays() ? `<div class="empty small">Det här föremålet följs inte i prishistoriken (bara de ca 5 000 mest handlade). Se Steam-snittet nedan.</div>` : `<div class="empty small">Prishistoriken är inte tillgänglig just nu (offline, eller så har prisjobbet inte byggt den än). Se Steam-snittet nedan.</div>`;
+    else if (pts.length < 2) box.innerHTML = `<div class="empty small">Historiken har precis börjat samlas in (${historyDays()} dag). Kurvan visas när det finns minst två dagar.</div>`;
+    else box.innerHTML = lineChart(pts.map(p => ({ x: p.x, y: usd2sek(p.y) })), { fmt: v => kr(v) }) + `<div class="muted small" style="margin-top:2px">Ett värde per dag: lägsta pris bland Skinport, CSFloat, CS.MONEY och Swap.gg (${pts.length} dagars data). Historiken sparas av vårt eget prisjobb och blir längre med tiden.</div>`;
+  };
+  await loadHistory();
+  if (!root.contains(box)) return;
+  draw(); root.querySelector("#histWear")?.addEventListener("change", draw);
+}
+
 function priceSection(e) {
   const mid = e.wr.includes("FT") ? "FT" : e.wr[Math.floor(e.wr.length / 2)] || null; // vanilla-knivar saknar slitage
   const mhn = mhnFor(e, mid);
   const tr = D.trend.get(mhn);
-  const chart = tr ? lineChart([{ x: Date.now() - 90 * 864e5, y: tr[3] }, { x: Date.now() - 30 * 864e5, y: tr[2] }, { x: Date.now() - 7 * 864e5, y: tr[1] }, { x: Date.now(), y: tr[0] ?? tr[1] }].filter(p => p.y != null).map(p => ({ x: p.x, y: usd2sek(p.y) })), { fmt: v => kr(v) }) : `<div class="empty small">Steam-historik laddas när live-priser hämtats.</div>`;
+  const chart = tr ? periodChart(tr) : `<div class="empty small">Ingen Steam-historik finns för det här föremålet.</div>`;
   return `<div class="grid cols-2 keep1" style="grid-template-columns:minmax(0,1fr)"><div class="panel"><div class="row spread"><h2 style="margin:0">Prisjämförelse</h2>
     ${e.st ? `<div class="seg"><button class="on" data-st="0">Normal</button><button data-st="1">StatTrak™</button></div>` : ""}</div><div style="height:10px"></div><div id="priceBox">${priceTable(e, false)}</div></div>
-    <div class="panel"><h2>Prisutveckling · ${mid ? WEAR_LONG[mid] : esc(e.n)} (Steam, 90 dagar)</h2>${chart}</div></div>`;
+    ${historyPanel(e, true)}
+    <div class="panel"><h2>Prisutveckling · ${mid ? WEAR_LONG[mid] : esc(e.n)} (Steam, snitt per period)</h2>${chart}</div></div>`;
 }
 
 function simplePrice(e) {
   const row = priceRow(e.mh);
   if (!row) return `<div class="panel"><h2>Pris</h2><div class="muted">Ingen prisdata hittades för detta föremål.</div></div>`;
-  return `<div class="panel"><h2>Prisjämförelse</h2><table class="tbl"><tbody>${MARKETS.map(m => `<tr><td>${m.name}</td><td class="r num">${row[m.key] ? krUsd(row[m.key]) : "–"}</td></tr>`).join("")}</tbody></table></div>`;
+  return `<div class="panel"><h2>Prisjämförelse</h2><table class="tbl"><tbody>${MARKETS.map(m => `<tr><td>${m.name}</td><td class="r num">${row[m.key] ? krUsd(row[m.key]) : "–"}</td></tr>`).join("")}</tbody></table></div><div style="height:12px"></div>${historyPanel(e, false)}`;
 }
 
 function contentsSection(e) {

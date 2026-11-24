@@ -71,7 +71,7 @@ function table(items) {
     R.push(row("StatTrak™ från", cols.map(c => c.stFrom ? `<span class="num">${kr(usd2sek(c.stFrom))}</span>` : "–"), best(c => c.stFrom)));
   }
   if (SHOW.net) R.push(row("Du får ut (netto)", cols.map(c => c.cash ? `<span class="num">${kr(usd2sek(c.cash))}</span><div class="muted small" style="font-weight:400">efter avgift${c.mid ? ", " + c.mid : ""}</div>` : "–"), best(c => c.cash, false)));
-  if (SHOW.trend) R.push(row("Prisutveckling 7 d", cols.map(c => c.ch7 != null ? `<span class="num ${cls(c.ch7)}">${pct(c.ch7)}</span><div class="muted small" style="font-weight:400">Steam-trend</div>` : "–")));
+  if (SHOW.trend) R.push(row("Nu mot 7 d-snitt", cols.map(c => c.ch7 != null ? `<span class="num ${cls(c.ch7)}">${pct(c.ch7)}</span><div class="muted small" style="font-weight:400">Steam-trend</div>` : "–")));
   R.push(row("", cols.map(c => `<a class="btn ghost sm" href="#/item/${esc(c.e.id)}">Öppna</a> <button class="btn ghost sm danger" data-x="${esc(c.e.id)}">Ta bort</button>`)));
   return `<div class="panel scroll-x" style="padding:0"><table class="tbl" style="min-width:${180 + cols.length * 190}px"><thead><tr><th></th>${cols.map(c => `<th style="text-transform:none;letter-spacing:0;font-size:13px;color:var(--text);vertical-align:bottom"><div class="hero-img" style="aspect-ratio:4/3;margin-bottom:8px"><img src="${esc(imgUrl(c.e.img, "256fx192f"))}" alt=""></div>${esc(c.e.n + (c.e.ph ? " · " + c.e.ph : ""))}</th>`).join("")}</tr></thead><tbody>${R.join("")}</tbody></table></div>`;
 }

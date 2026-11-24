@@ -1,11 +1,12 @@
-import { $, $$, esc, imgUrl, kr, krm, dec, signKr, pct, cls, fmtDate, modal, toast, uid, lineChart, COLORS, COLOR_LABEL, WEAR_LONG, rarityOrder, debounce, usd2sek, download, confirmBox, MISSING } from "../util.js";
+import { $, $$, esc, imgUrl, kr, krm, dec, parseDec, signKr, pct, cls, fmtDate, modal, toast, uid, lineChart, multiChart, COLORS, COLOR_LABEL, WEAR_LONG, rarityOrder, debounce, usd2sek, download, confirmBox, MISSING } from "../util.js";
 import { all, put, putMany, del, exportAll, importAll } from "../store.js";
-import { lookup, mhnFor, bestUsd, priceTip } from "../data.js";
+import { lookup, mhnFor, bestUsd, priceTip, D, MARKETS } from "../data.js";
 import { loadState, buildRows, totals, posKey } from "../finance.js";
 import { pageHead, stat, itemPicker, KIND_LABEL, emptyState, priceNote } from "./common.js";
 import { shareModal } from "./share.js";
 import { steamImportModal } from "./steam-import.js";
 import { backupNow } from "../upkeep.js";
+import { openCardModal } from "./card.js";
 
 const V = { tab: "holdings", mode: "cash", view: "cards", fOpen: false, q: "", kind: "", cat: "", rarity: "", color: "", pmin: "", pmax: "", fmin: "", fmax: "", cost: "", fav: false, hidden: false, sort: "value" };
 const sel = new Set(); // markerade föremål (masshantering)
@@ -17,8 +18,10 @@ export async function recordSnapshot() {
   const { rows, pos } = buildRows(items, trades);
   const t = totals(rows, pos);
   const snaps = await all("snapshots");
-  const last = snaps.length ? Math.max(...snaps.map(s => s.ts)) : 0;
-  if (Date.now() - last > 6 * 3600e3 && t.steam > 0) await put("snapshots", { ts: Date.now(), steam: t.steam, cash: t.cash, cost: t.cost });
+  const lastSnap = snaps.sort((a, b) => a.ts - b.ts)[snaps.length - 1];
+  const last = lastSnap?.ts || 0, age = Date.now() - last;
+  const costChanged = lastSnap && Math.abs((lastSnap.cost || 0) - t.cost) > 0.01; // nytt köp/sälj → spara direkt så grafen visar steget
+  if ((age > 6 * 3600e3 || (costChanged && age > 5 * 60e3)) && t.steam > 0) await put("snapshots", { ts: Date.now(), steam: t.steam, cash: t.cash, cost: t.cost });
 }
 
 /* ============================ Huvudvy ============================ */
@@ -38,11 +41,11 @@ export async function renderInventory(root, tab) {
   const best = rows.filter(r => r.cost && (steamMode ? r.plSteam : r.plCash) != null).map(r => ({ r, pc: (steamMode ? r.plSteam : r.plCash) / r.cost * 100 })).sort((a, b) => b.pc - a.pc)[0];
   const showPL = t.withCost || hasSales;
   const charts = `<div class="grid split" style="margin-bottom:18px">
-      <div class="panel"><h2>Värdeutveckling</h2>${lineChart(pts, { fmt: v => kr(v), since: snaps[0]?.ts })}</div>
+      <div class="panel"><h2>Värde och inköp över tid</h2>${valueChart(snaps, trades, steamMode, t)}</div>
       <div class="panel"><h2>Värde per kategori</h2>${categoryBars(t, steamMode)}</div></div>`;
 
   root.innerHTML = `<div class="row spread" style="align-items:flex-start"><div>${pageHead("My Inventory", "Värde, inköp och vinst – allt sparas lokalt i din webbläsare.")}</div>
-    <div class="row"><button class="btn ghost" id="bShare">Dela</button><button class="btn ghost" id="bImport">Hämta Steam-inventory</button><button class="btn" id="bAdd">+ Lägg till föremål</button></div></div>
+    <div class="row"><button class="btn ghost" id="bShare">Dela</button><button class="btn ghost" id="bCard" title="Skapa en bild av ditt inventory att dela (utan inköpspriser)">Dela som bild</button><button class="btn ghost" id="bImport">Hämta Steam-inventory</button><button class="btn" id="bAdd">+ Lägg till föremål</button></div></div>
     <div class="kpis">
       <div class="panel stat"><div class="row spread" style="flex-wrap:nowrap"><span class="lbl">Totalt värde</span><div class="seg sm" id="modeSeg"><button data-m="cash" class="${!steamMode ? "on" : ""}" title="Netto efter marknadsavgift – vad du får ut">Riktiga pengar</button><button data-m="steam" class="${steamMode ? "on" : ""}" title="Steam Market-pris – krediter som inte går att ta ut">Steam</button></div></div>
         <div class="val num">${kr(val)}</div><div class="sub">${steamMode ? "Steam-krediter, går inte att ta ut" : "netto efter marknadsavgift"}</div></div>
@@ -57,19 +60,69 @@ export async function renderInventory(root, tab) {
       <li><b>Realiserad vinst</b> bygger bara på försäljningar du <b>registrerat</b> (pris minus avgift minus snittkostnad).</li>
       <li><b>≈ vid snittinköp</b> betyder att köpet registrerades utan float, så snittet för skinet används – inte exakt för just det exemplaret.</li>
       <li><b>Doppler-faser</b> prissätts inte per fas i vår prisdata – se märket "fas ej prissatt".</li></ul></details>
-    <div class="tabs">${[["holdings", "Innehav"], ["trades", "Transaktioner"], ["profit", "Vinst per föremål"], ["analysis", "Analys"]].map(([k, l]) => `<button data-t="${k}" class="${V.tab === k ? "on" : ""}">${l}</button>`).join("")}</div>
+    <div class="tabs">${[["holdings", "Innehav"], ["trades", "Transaktioner"], ["profit", "Vinst per föremål"], ["sell", "Var sälja"], ["analysis", "Analys"]].map(([k, l]) => `<button data-t="${k}" class="${V.tab === k ? "on" : ""}">${l}</button>`).join("")}</div>
     <div id="tabBody"></div>
     <p class="muted small" style="margin-top:14px">${esc(priceNote())}</p>`;
   $("#bAdd", root).addEventListener("click", () => addItemModal({}));
   $("#bShare", root).addEventListener("click", () => rows.length ? shareModal(rows) : toast("Lägg till föremål först"));
   $("#bImport", root).addEventListener("click", () => steamImportModal(rerender));
+  $("#bCard", root).addEventListener("click", () => {
+    const by = new Map(); // ett kort per marknadsnamn (antal summeras); dolda föremål visas aldrig
+    for (const r of rows) { if (r.it.hidden || !r.mhn) continue; const g = by.get(r.mhn) || { r, qty: 0 }; g.qty += r.qty || 1; by.set(r.mhn, g); }
+    const WS = { "Factory New": "FN", "Minimal Wear": "MW", "Field-Tested": "FT", "Well-Worn": "WW", "Battle-Scarred": "BS" };
+    let total = 0;
+    const entries = [...by.values()].map(({ r, qty }) => {
+      const e = r.e, u = bestUsd(r.mhn), unit = u != null ? usd2sek(u) : null; if (unit != null) total += unit * qty;
+      const wear = (r.mhn.match(/\((Factory New|Minimal Wear|Field-Tested|Well-Worn|Battle-Scarred)\)$/) || [])[1];
+      const st = /^(★ )?StatTrak™/.test(r.mhn);
+      return { sort: (unit || 0) * qty, name1: e?.w || e?.n || r.mhn, name2: e ? ((e.p || e.n.replace(/^(Sticker|Charm|Patch|Sealed Graffiti|Music Kit) \| /, "")) + (e.ph ? " · " + e.ph : "")) : r.mhn, tag: [e?.w || KIND_LABEL[e?.kind] || "", wear ? WS[wear] : "", st ? "ST™" : "", qty > 1 ? "×" + qty : ""].filter(Boolean).join(" · "), price: unit, img: e?.img ? imgUrl(e.img, "256fx192f") : "", rc: e?.rc };
+    }).sort((a, b) => b.sort - a.sort);
+    openCardModal({ title: "Mitt CS2-inventory", entries, total, filename: "cs2hub-inventory" });
+  });
   $$("#modeSeg button", root).forEach(b => b.addEventListener("click", () => { V.mode = b.dataset.m; rerender(); }));
   $$(".tabs button", root).forEach(b => b.addEventListener("click", () => { V.tab = b.dataset.t; rerender(); }));
   const body = $("#tabBody", root);
   if (V.tab === "holdings") holdingsTab(body, rows);
   else if (V.tab === "trades") tradesTab(body, trades);
   else if (V.tab === "profit") profitTab(body, rows, pos, steamMode);
+  else if (V.tab === "sell") sellTab(body, rows);
   else analysisTab(body, rows, t, steamMode, charts);
+}
+
+/** Värdelinje + registrerad kostnad + köp/sälj-markeringar. Skillnaden mellan linjerna är din (orealiserade) vinst. */
+function valueChart(snaps, trades, steamMode, t) {
+  const s = [...snaps].sort((a, b) => a.ts - b.ts);
+  const value = s.map(x => ({ x: x.ts, y: steamMode ? x.steam : x.cash }));
+  const cost = s.filter(x => x.cost > 0).map(x => ({ x: x.ts, y: x.cost }));
+  const marks = trades.filter(x => x.type === "buy" || x.type === "sell").map(x => ({ x: x.date, type: x.type, tip: `${x.type === "buy" ? "Köp" : "Försäljning"}: ${x.qty} × ${x.mhn} à ${kr(x.price)}` }));
+  let summary = "";
+  if (value.length >= 2 && cost.length >= 2 && t.withoutCost === 0) {
+    const dv = value[value.length - 1].y - value[0].y, dc = cost[cost.length - 1].y - cost[0].y, dm = dv - dc;
+    summary = `<div class="row small" style="gap:16px;margin-top:8px;flex-wrap:wrap"><span class="muted">Sedan ${fmtDate(value[0].x)}:</span><span>Värde <b class="num ${cls(dv)}">${signKr(dv)}</b></span><span>Mer investerat <b class="num">${signKr(dc)}</b></span><span title="Värdeändring minus det du lagt till i inköp – ungefär vad marknaden gjort med ditt innehav">Marknadsrörelse <b class="num ${cls(dm)}">${signKr(dm)}</b></span></div>`;
+  } else if (value.length >= 2 && t.withoutCost > 0) summary = `<div class="muted small" style="margin-top:8px">Lägg in inköpspris på alla föremål för att se hur mycket av värdeökningen som är marknadsrörelse och hur mycket som är nya köp.</div>`;
+  return multiChart([{ name: steamMode ? "Värde (Steam)" : "Värde (netto)", color: "#e7e9ec", pts: value }, { name: "Registrerad kostnad", color: "#8a9099", dash: "5 4", pts: cost }], { fmt: v => kr(v), marks, since: snaps[0]?.ts }) + summary;
+}
+
+/** Var får du mest betalt? Jämför nettot (efter avgift) på marknaderna som betalar ut riktiga pengar. */
+function sellTab(body, allRows) {
+  const sellers = MARKETS.filter(m => m.real && ["skinport", "csfloat"].includes(m.key));
+  const by = new Map();
+  for (const r of allRows) { if (r.it.hidden || !r.mhn) continue; const g = by.get(r.mhn) || { mhn: r.mhn, e: r.e, qty: 0 }; g.qty += r.qty || 1; by.set(r.mhn, g); }
+  const list = [...by.values()].map(g => {
+    const row = D.P.p[g.mhn] || [];
+    const nets = sellers.map(m => ({ m, list: row[m.i] || null, net: row[m.i] ? row[m.i] * (1 - m.fee) : null }));
+    const best = nets.filter(x => x.net).sort((a, b) => b.net - a.net)[0] || null, other = nets.filter(x => x.net && x !== best)[0] || null;
+    return { ...g, nets, best, gain: best && other ? (best.net - other.net) * g.qty : 0, steam: row[0] || null };
+  }).filter(g => g.best).sort((a, b) => b.best.net * b.qty - a.best.net * a.qty);
+  if (!list.length) { body.innerHTML = emptyState("Inget att jämföra än", "Här visas var du får mest betalt när dina föremål har priser på Skinport eller CSFloat."); return; }
+  const total = list.reduce((s, g) => s + g.best.net * g.qty, 0), gain = list.reduce((s, g) => s + g.gain, 0);
+  body.innerHTML = `<div class="panel" style="margin-bottom:12px"><div class="row" style="gap:22px;flex-wrap:wrap"><div><div class="muted small">Du får ut (om du säljer allt på bästa marknad)</div><div class="num" style="font-size:20px">${kr(usd2sek(total))}</div></div>
+      <div><div class="muted small">Vinst på att välja rätt marknad</div><div class="num pos" style="font-size:20px">+${kr(usd2sek(gain))}</div></div></div>
+      <p class="muted small" style="margin:8px 0 0">Netto = listpris minus marknadens avgift (${sellers.map(m => `${esc(m.name)} ${dec(m.fee * 100, 1)} %`).join(", ")}). Listpriser är utropspriser – verkligt säljpris kan bli lite lägre. Bara marknader som betalar ut riktiga pengar jämförs. Justera avgifterna under Inställningar.</p></div>
+    <div class="panel scroll-x" style="padding:0"><table class="tbl"><thead><tr><th>Föremål</th><th class="r">Antal</th>${sellers.map(m => `<th class="r">${esc(m.name)} netto</th>`).join("")}<th>Sälj på</th><th class="r hide-m">Steam (krediter)</th></tr></thead><tbody>
+    ${list.slice(0, 200).map(g => `<tr><td><div class="nm">${g.e ? `<img loading="lazy" src="${esc(imgUrl(g.e.img, "96fx72f"))}" alt="" width="56" height="42">` : ""}<div class="n2">${esc(g.mhn)}</div></div></td><td class="r num">${g.qty}</td>
+      ${g.nets.map(x => `<td class="r num" style="${x === g.best ? "font-weight:700" : ""}">${x.net ? kr(usd2sek(x.net)) : '<span class="faint">–</span>'}</td>`).join("")}
+      <td><b>${esc(g.best.m.name)}</b>${g.gain > 0.005 ? ` <span class="pos small">+${kr(usd2sek(g.gain))}</span>` : ""}</td><td class="r num hide-m muted">${g.steam ? kr(usd2sek(g.steam)) : "–"}</td></tr>`).join("")}</tbody></table></div>${list.length > 200 ? `<div class="muted small" style="margin-top:8px">Visar de 200 mest värdefulla av ${list.length}.</div>` : ""}`;
 }
 
 function categoryBars(t, steamMode) {
@@ -100,20 +153,61 @@ function openMenu(btn, items) {
 }
 
 /** Snabbregistrera inköpspris utan att öppna den stora transaktionsrutan. */
-function quickCostModal(r, done) {
-  modal(`<h3>Vad betalade du?</h3><p class="muted small" style="margin-top:0">${esc(r.mhn)}${r.float != null ? " · float " + dec(r.float, 4) : ""}</p>
-    <div class="form"><label>Pris per st (kr)<input class="inp" id="qp" type="number" min="0" step="0.01" placeholder="${r.unit != null ? dec(r.unit, 2) : ""}"></label><label>Antal<input class="inp" id="qq" type="number" min="1" value="${r.qty}"></label>
-    <label>Datum<input class="inp" id="qd" type="date" value="${today()}"></label><label>Avgift totalt (kr)<input class="inp" id="qf" type="number" min="0" step="0.01" value="0"></label></div>
-    <div class="row" style="margin-top:16px;justify-content:flex-end"><button class="btn ghost" data-close>Avbryt</button><button class="btn" id="qs">Spara</button></div>`, {
+function quickCostModal(r, done, queue = []) {
+  const mk = bestUsd(r.mhn) != null ? usd2sek(bestUsd(r.mhn)) : null; // dagens lägsta marknadspris (kr)
+  const qty0 = r.qty || 1;
+  const left = queue.length;
+  modal(`<h3>Vad betalade du?</h3><p class="muted small" style="margin-top:0">${esc(r.mhn)}${r.float != null ? " · float " + dec(r.float, 4) : ""}${qty0 > 1 ? ` · ${qty0} st` : ""}${left ? ` · ${left} till i kön` : ""}</p>
+    <div class="form"><label class="full">Pris<div class="row" style="flex-wrap:nowrap;gap:8px"><input class="inp" id="qp" type="text" inputmode="decimal" autocomplete="off" placeholder="t.ex. 12,50" style="flex:1;min-width:0;font-size:18px"><div class="seg sm" id="qmode"><button type="button" data-m="each" class="on">Per st</button>${qty0 > 1 ? `<button type="button" data-m="total">Totalt</button>` : ""}</div></div></label>
+    ${mk != null ? `<div class="full row" style="gap:6px"><button type="button" class="chip" id="qmk">Använd marknadspris ${esc(kr(mk))}</button></div>` : ""}
+    <label>Antal<input class="inp" id="qq" type="number" min="1" value="${qty0}"></label><label>Datum<input class="inp" id="qd" type="date" value="${today()}"></label></div>
+    <details style="margin-top:10px"><summary class="muted small" style="cursor:pointer;width:max-content">+ Avgift eller marknadsplats</summary><div class="form" style="margin-top:8px"><label>Avgift totalt (kr)<input class="inp" id="qf" type="text" inputmode="decimal" value="0"></label><label>Betalat med<select class="inp" id="qpay"><option value="cash">Riktiga pengar</option><option value="steam">Steam-krediter</option></select></label></div></details>
+    <div id="qsum" class="muted small" style="margin-top:10px;min-height:18px"></div>
+    <div class="row" style="margin-top:12px;justify-content:flex-end"><button class="btn ghost" data-close>Avbryt</button>${left ? `<button class="btn ghost" id="qskip">Hoppa över</button>` : ""}<button class="btn" id="qs">${left ? "Spara & nästa" : "Spara"}</button></div>`, {
     onMount: (m, close) => {
-      m.querySelector("#qp").focus();
-      m.querySelector("#qs").addEventListener("click", async () => {
-        const price = m.querySelector("#qp").value;
-        if (price === "" || !(+price >= 0)) return toast("Ange pris per st");
-        await put("trades", { id: uid(), type: "buy", mhn: r.mhn, qty: Math.max(1, Math.floor(+m.querySelector("#qq").value) || 1), price: +price, fee: +m.querySelector("#qf").value || 0, date: new Date(m.querySelector("#qd").value).getTime() || Date.now(), market: "", pay: "cash", float: r.float, seed: r.seed, note: "", created: Date.now() });
-        close(); toast("Inköpspris sparat"); done();
-      });
+      const P = m.querySelector("#qp"); let mode = "each"; P.focus();
+      const qty = () => Math.max(1, Math.floor(+m.querySelector("#qq").value) || 1);
+      const perUnit = () => { const v = parseDec(P.value); return v == null || v < 0 ? null : mode === "total" ? v / qty() : v; };
+      const sum = () => { const u = perUnit(); m.querySelector("#qsum").textContent = u == null ? "" : `= ${kr(u)} per st${qty() > 1 ? ` · ${kr(u * qty())} totalt` : ""}${mk && u ? ` · ${pct((u / mk - 1) * 100)} mot marknadspris` : ""}`; };
+      P.addEventListener("input", sum); m.querySelector("#qq").addEventListener("input", sum);
+      m.querySelectorAll("#qmode button").forEach(b => b.addEventListener("click", () => { mode = b.dataset.m; m.querySelectorAll("#qmode button").forEach(x => x.classList.toggle("on", x === b)); sum(); P.focus(); }));
+      m.querySelector("#qmk")?.addEventListener("click", () => { mode = "each"; m.querySelectorAll("#qmode button").forEach(x => x.classList.toggle("on", x.dataset.m === "each")); P.value = dec(mk, 2).replace(/\s/g, ""); sum(); P.focus(); });
+      const next = () => { close(); if (queue.length) quickCostModal(queue[0], done, queue.slice(1)); else done(); };
+      m.querySelector("#qskip")?.addEventListener("click", next);
+      let busy = false;
+      const save = async () => {
+        if (busy) return; // dubbelklick/Enter två gånger får inte skapa dubbletter
+        const price = perUnit();
+        if (price == null) return toast("Skriv ett pris, t.ex. 12,50");
+        busy = true;
+        await put("trades", { id: uid(), type: "buy", mhn: r.mhn, qty: qty(), price, fee: parseDec(m.querySelector("#qf").value) || 0, date: new Date(m.querySelector("#qd").value).getTime() || Date.now(), market: "", pay: m.querySelector("#qpay").value, float: r.float, seed: r.seed, note: "", created: Date.now() });
+        toast("Inköpspris sparat"); next();
+      };
+      m.querySelector("#qs").addEventListener("click", save);
+      m.addEventListener("keydown", e => { if (e.key === "Enter" && e.target.tagName !== "BUTTON" && e.target.tagName !== "SUMMARY") { e.preventDefault(); save(); } });
     },
+  });
+}
+
+/** Banner som erbjuder en snabb väg att fylla i saknade inköpspris. */
+function missingCostBar(rows, done) {
+  const miss = rows.filter(r => r.unitCost == null && !r.it.hidden && r.mhn && bestUsd(r.mhn) != null);
+  if (!miss.length) return "";
+  return `<div class="panel" id="costBar" style="margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span class="small" style="flex:1;min-width:200px"><b>${miss.length}</b> föremål saknar inköpspris – lägg in dem så räknas vinsten ut.</span><button class="btn sm" id="costGo">Fyll i ett i taget</button><button class="btn ghost sm" id="costMk" title="Sätter dagens marknadspris som inköpspris. Vinsten startar då på 0 kr.">Använd dagens pris för alla</button></div>`;
+}
+function bindMissingCost(host, rows, unitFn, done) {
+  const miss = rows.filter(r => r.unitCost == null && !r.it.hidden && r.mhn && bestUsd(r.mhn) != null).map(r => ({ ...r, unit: unitFn(r) }));
+  $("#costGo", host)?.addEventListener("click", () => quickCostModal(miss[0], done, miss.slice(1)));
+  $("#costMk", host)?.addEventListener("click", async () => {
+    { // läs om läget – kön kan ha fyllt i en del sedan sidan ritades
+      const fresh = await loadState(); const rowsNow = buildRows(fresh.items, fresh.trades).rows;
+      const stillMissing = new Set(rowsNow.filter(r => r.unitCost == null).map(r => r.it.id));
+      for (let i = miss.length - 1; i >= 0; i--) if (!stillMissing.has(miss[i].it.id)) miss.splice(i, 1);
+      if (!miss.length) { toast("Alla föremål har redan inköpspris"); return done(); }
+    }
+    if (!await confirmBox(`Sätta dagens lägsta marknadspris som inköpspris på ${miss.length} föremål? Det är bara en startpunkt: vinsten räknas då från idag, inte från vad du faktiskt betalade. Du kan ändra varje köp senare under Transaktioner.`, { ok: "Sätt priser" })) return;
+    await putMany("trades", miss.map(r => ({ id: uid(), type: "buy", mhn: r.mhn, qty: r.qty || 1, price: usd2sek(bestUsd(r.mhn)), fee: 0, date: Date.now(), market: "", pay: "cash", float: r.float, seed: r.seed, note: "Startpris (dagens marknadspris)", created: Date.now() })));
+    toast(`${miss.length} inköpspris satta`); done();
   });
 }
 
@@ -134,7 +228,7 @@ function holdingsTab(body, allRows) {
       <div class="row" style="flex-wrap:nowrap"><input class="inp" id="pmin" type="number" placeholder="Min kr" value="${esc(V.pmin)}" aria-label="Lägsta värde"><input class="inp" id="pmax" type="number" placeholder="Max kr" value="${esc(V.pmax)}" aria-label="Högsta värde"></div>
       <div class="row" style="flex-wrap:nowrap"><input class="inp" id="fmin" type="number" step="0.01" min="0" max="1" placeholder="Float ≥" value="${esc(V.fmin)}" aria-label="Lägsta float"><input class="inp" id="fmax" type="number" step="0.01" min="0" max="1" placeholder="Float ≤" value="${esc(V.fmax)}" aria-label="Högsta float"></div>
       <div class="row"><label class="chip ${V.fav ? "on" : ""}" id="fav">★ Favoriter</label><label class="chip ${V.hidden ? "on" : ""}" id="hid">Visa dolda</label><button class="btn ghost sm" id="fclear" style="margin-left:auto">Rensa filter</button></div></div></div>
-    <div id="bulk"></div><div id="list"></div>`;
+    ${missingCostBar(allRows)}<div id="bulk"></div><div id="list"></div>`;
   const bind = (id, key, ev = "input") => { const el = $("#" + id, body); el && el.addEventListener(ev, debounce(() => { V[key] = el.value; draw(); updBtn(); }, 140)); };
   const updBtn = () => { const k = activeFilters(); $("#fbtn", body).textContent = `Filter (${k})`; $("#fbtn", body).classList.toggle("on-filter", k > 0); };
   bind("q", "q"); bind("kind", "kind", "change"); bind("cat", "cat", "change"); bind("rar", "rarity", "change"); bind("col", "color", "change"); bind("cost", "cost", "change");
@@ -148,6 +242,7 @@ function holdingsTab(body, allRows) {
   const steamMode = V.mode === "steam";
   let shown = [];
   const unit = r => steamMode ? r.steam : r.cash;
+  bindMissingCost(body, allRows, unit, rerender);
   const value = r => steamMode ? r.vSteam : r.vCash;
   const pl = r => steamMode ? r.plSteam : r.plCash;
   function draw() {
@@ -350,28 +445,32 @@ export function addItemModal({ entry = null, mhn = null, onDone = null }) {
         ${hasWear && e.f ? `<label>Float (valfritt)<input class="inp" id="fl" type="number" step="0.00001" min="0" max="1"></label><label>Paint seed (valfritt)<input class="inp" id="sd" type="number" min="0" max="1000"></label>` : ""}
         <label>Antal<input class="inp" id="qty" type="number" min="1" value="1"></label>
         <label class="full" style="grid-auto-flow:column;justify-content:start;align-items:center;gap:8px"><input type="checkbox" id="buy" checked> Registrera inköp samtidigt</label>
-        <label class="b">Inköpspris per st (kr)<input class="inp" id="pr" type="number" min="0" step="0.01"></label><label class="b">Datum<input class="inp" id="dt" type="date" value="${today()}"></label>
-        <label class="b">Marknadsplats<select class="inp" id="mk">${MARKET_OPTS.map(o => `<option>${o}</option>`).join("")}</select></label><label class="b">Avgift (kr)<input class="inp" id="fee" type="number" min="0" step="0.01" value="0"></label>
+        <label class="b">Inköpspris per st (kr)<input class="inp" id="pr" type="text" inputmode="decimal" autocomplete="off" placeholder="t.ex. 12,50"></label><div class="b" style="display:flex;align-items:end"><button type="button" class="chip" id="usemk">Använd marknadspris</button></div><label class="b">Datum<input class="inp" id="dt" type="date" value="${today()}"></label>
+        <label class="b">Marknadsplats<select class="inp" id="mk">${MARKET_OPTS.map(o => `<option>${o}</option>`).join("")}</select></label><label class="b">Avgift (kr)<input class="inp" id="fee" type="text" inputmode="decimal" value="0"></label>
         <label class="b">Betalat med<select class="inp" id="pay"><option value="cash">Riktiga pengar</option><option value="steam">Steam-krediter</option></select></label><label class="b">Notering<input class="inp" id="note" placeholder="t.ex. byte mot …"></label></div>
         <div class="row" style="margin-top:16px;justify-content:flex-end"><button class="btn ghost" data-close>Avbryt</button><button class="btn" id="save">Spara</button></div>`;
         const cur = () => { const v = form.querySelector("#var")?.value; return mhnFor(e, form.querySelector("#wear")?.value || null, { st: v === "st", sv: v === "sv" }); };
         const px = () => { const u = bestUsd(e.wr ? cur() : e.mh); form.querySelector("#px").innerHTML = u ? "Marknadspris: " + kr(usd2sek(u)) : "Marknadspris: " + MISSING; };
         form.querySelectorAll("#wear,#var").forEach(x => x.addEventListener("change", px)); px();
+        form.querySelector("#usemk").addEventListener("click", () => { const u = bestUsd(e.wr ? cur() : e.mh); if (u == null) return toast("Det finns inget marknadspris för det här föremålet"); form.querySelector("#pr").value = dec(usd2sek(u), 2).replace(/\s/g, ""); });
         form.querySelector("#chg").addEventListener("click", () => { e = null; m.querySelector("#pk").hidden = false; show(); });
         form.querySelector("#buy").addEventListener("change", ev => form.querySelectorAll(".b").forEach(x => x.style.display = ev.target.checked ? "" : "none"));
+        let busy = false;
         form.querySelector("#save").addEventListener("click", async () => {
+          if (busy) return; // skydd mot dubbelklick
           const name = e.wr ? cur() : e.mh;
           const qty = Math.max(1, Math.floor(+form.querySelector("#qty").value) || 1);
           const fl = numOrNull(form.querySelector("#fl")?.value), sd = numOrNull(form.querySelector("#sd")?.value);
           if (fl != null && e.f && (fl < e.f[0] - 1e-9 || fl > e.f[1] + 1e-9)) return toast(`Floaten måste ligga mellan ${dec(e.f[0], 2)} och ${dec(e.f[1], 2)} för det här skinet.`);
+          busy = true;
           const items = await all("items");
           let it = items.find(i => i.mhn === name && i.float == null && fl == null && i.source !== "steam");
           if (it) it.qty = (it.qty || 1) + qty;
           else it = { id: uid(), mhn: name, qty: fl != null ? 1 : qty, float: fl, seed: sd, source: "manual", added: Date.now() };
           await put("items", it);
           if (form.querySelector("#buy").checked) {
-            const price = +form.querySelector("#pr").value;
-            if (price > 0) await put("trades", { id: uid(), type: "buy", mhn: name, qty: fl != null ? 1 : qty, price, fee: +form.querySelector("#fee").value || 0, date: new Date(form.querySelector("#dt").value).getTime() || Date.now(), market: form.querySelector("#mk").value, pay: form.querySelector("#pay").value, float: fl, seed: sd, note: form.querySelector("#note").value, created: Date.now() });
+            const price = parseDec(form.querySelector("#pr").value);
+            if (price > 0) await put("trades", { id: uid(), type: "buy", mhn: name, qty: fl != null ? 1 : qty, price, fee: parseDec(form.querySelector("#fee").value) || 0, date: new Date(form.querySelector("#dt").value).getTime() || Date.now(), market: form.querySelector("#mk").value, pay: form.querySelector("#pay").value, float: fl, seed: sd, note: form.querySelector("#note").value, created: Date.now() });
           }
           close(); toast("Tillagd i inventory"); done();
         });
@@ -410,18 +509,21 @@ export function tradeModal({ mhn = null, type = "buy", item = null, onDone = nul
         if (!name) { form.innerHTML = ""; return; }
         form.innerHTML = `<div class="muted small" style="margin-bottom:10px"><b>${esc(name)}</b> · marknadspris ${unit != null || bestUsd(name) ? kr(usd2sek(bestUsd(name))) : "–"}${bestUsd(name) ? "" : " " + MISSING}</div>
         <div class="form"><label>Typ<select class="inp" id="tp"><option value="buy" ${type === "buy" ? "selected" : ""}>Köp</option><option value="sell" ${type === "sell" ? "selected" : ""}>Sälj</option></select></label><label>Antal<input class="inp" id="qty" type="number" min="1" value="1"></label>
-        <label>Pris per st (kr)<input class="inp" id="pr" type="number" min="0" step="0.01" value="${type === "sell" && unit ? unit.toFixed(2) : ""}"></label><label>Avgift totalt (kr)<input class="inp" id="fee" type="number" min="0" step="0.01" value="0"></label>
+        <label>Pris per st (kr)<input class="inp" id="pr" type="text" inputmode="decimal" autocomplete="off" placeholder="t.ex. 12,50" value="${type === "sell" && unit ? dec(unit, 2).replace(/\s/g, "") : ""}"></label><label>Avgift totalt (kr)<input class="inp" id="fee" type="text" inputmode="decimal" value="0"></label>
         <label>Datum<input class="inp" id="dt" type="date" value="${today()}"></label><label>Marknadsplats<select class="inp" id="mk">${MARKET_OPTS.map(o => `<option>${o}</option>`).join("")}</select></label>
         <label>${type === "sell" ? "Fick betalt i" : "Betalade med"}<select class="inp" id="pay"><option value="cash">Riktiga pengar</option><option value="steam">Steam-krediter</option></select></label>
         <label>Notering (t.ex. byten)<input class="inp" id="note"></label>
         <label>Float (om unikt exemplar)<input class="inp" id="fl" type="number" step="0.00001" min="0" max="1" value="${item?.float ?? ""}"></label><label>Paint seed<input class="inp" id="sd" type="number" min="0" max="1000" value="${item?.seed ?? ""}"></label>
         <label class="full" style="grid-auto-flow:column;justify-content:start;align-items:center;gap:8px"><input type="checkbox" id="sync" checked> Uppdatera inventory (lägg till/ta bort föremålet)</label></div>
         <div class="row" style="margin-top:16px;justify-content:flex-end"><button class="btn ghost" data-close>Avbryt</button><button class="btn" id="save">Spara</button></div>`;
+        let busy = false;
         form.querySelector("#save").addEventListener("click", async () => {
-          const tp = form.querySelector("#tp").value, qty = Math.max(1, Math.floor(+form.querySelector("#qty").value) || 1), price = +form.querySelector("#pr").value;
-          if (form.querySelector("#pr").value === "" || !(price >= 0)) return toast("Ange pris");
+          if (busy) return; // skydd mot dubbelklick
+          const tp = form.querySelector("#tp").value, qty = Math.max(1, Math.floor(+form.querySelector("#qty").value) || 1), price = parseDec(form.querySelector("#pr").value);
+          if (price == null || !(price >= 0)) return toast("Skriv ett pris, t.ex. 12,50");
+          busy = true;
           const fl = numOrNull(form.querySelector("#fl").value), sd = numOrNull(form.querySelector("#sd").value);
-          await put("trades", { id: uid(), type: tp, mhn: name, qty, price, fee: +form.querySelector("#fee").value || 0, date: new Date(form.querySelector("#dt").value).getTime() || Date.now(), market: form.querySelector("#mk").value, pay: form.querySelector("#pay").value, float: fl, seed: sd, note: form.querySelector("#note").value, created: Date.now() });
+          await put("trades", { id: uid(), type: tp, mhn: name, qty, price, fee: parseDec(form.querySelector("#fee").value) || 0, date: new Date(form.querySelector("#dt").value).getTime() || Date.now(), market: form.querySelector("#mk").value, pay: form.querySelector("#pay").value, float: fl, seed: sd, note: form.querySelector("#note").value, created: Date.now() });
           if (form.querySelector("#sync").checked) {
             const items = await all("items");
             if (tp === "buy") {

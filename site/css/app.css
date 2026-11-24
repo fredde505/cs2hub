@@ -32,6 +32,11 @@ button,input,select,textarea{font:inherit;color:inherit}
 .top-actions{margin-left:auto}
 .menu-btn{display:none}
 .view{padding:24px;max-width:1400px}
+.view:focus{outline:none}
+.skip{position:absolute;left:8px;top:-60px;z-index:500;background:var(--text);color:#111;border:0;border-radius:6px;padding:8px 14px;font-weight:600;cursor:pointer}
+.skip:focus{top:8px}
+/* Långa kortlistor: rendera bara det som syns (snabbare scroll och laddning) */
+.cards>.card{content-visibility:auto;contain-intrinsic-size:auto 230px}
 .icon-btn{background:none;border:1px solid var(--line);border-radius:6px;padding:4px 9px;cursor:pointer}
 .search,.inp,select.inp{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:7px 10px;outline:none;min-width:0}
 .search{width:260px}

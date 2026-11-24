@@ -3,7 +3,9 @@ import { all, putMany, del, getKV, setKV } from "../store.js";
 import { lookup } from "../data.js";
 import { STEAM_PROXY } from "../config.js";
 
-const PROXIES = [u => u, u => "https://corsproxy.io/?url=" + encodeURIComponent(u), u => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u)];
+// Integritet: inga tredjeparts-proxyer. Ditt Steam-ID skickas bara till Steam (direkt) och till din egen proxy.
+const PROXIES = [u => u];
+const okProxy = u => /^https:\/\/[\w.-]+(:\d+)?\/?$/.test(u);
 
 async function tryFetch(url, asText = false) {
   for (const p of PROXIES) {
@@ -16,10 +18,10 @@ async function tryFetch(url, asText = false) {
   return null;
 }
 
-// Egen proxy (Cloudflare Worker, se worker/steam-proxy.js) provas först; publika proxyer är reserv.
+// Egen proxy (Cloudflare Worker, se worker/steam-proxy.js).
 let workerUrl = STEAM_PROXY;
 async function workerGet(path) {
-  if (!workerUrl) return null;
+  if (!workerUrl || !okProxy(workerUrl)) return null;
   try {
     const r = await fetch(workerUrl.replace(/\/+$/, "") + path, { cache: "no-store" });
     return { status: r.status, json: await r.json().catch(() => null) };
@@ -92,7 +94,7 @@ export async function steamImportModal(onDone = () => { }) {
     <p class="muted small">Importen ersätter tidigare Steam-importerade föremål (favoriter och dolda behålls). Manuellt tillagda föremål och transaktioner rörs inte. Steam ger inte float eller seed – lägg till dem via Redigera.</p>`, {
     onMount: (m, close) => {
       const st = m.querySelector("#st");
-      m.querySelector("#px").addEventListener("change", async e => { workerUrl = e.target.value.trim(); await setKV("proxyUrl", workerUrl); });
+      m.querySelector("#px").addEventListener("change", async e => { const v = e.target.value.trim(); if (v && !okProxy(v)) return toast("Adressen ska se ut som https://namn.workers.dev"); workerUrl = v.replace(/\/$/, ""); await setKV("proxyUrl", workerUrl); });
       m.querySelector("#go").addEventListener("click", async () => {
         st.textContent = "Hämtar…";
         const id = await resolveSteamId(m.querySelector("#sid").value);

@@ -76,7 +76,8 @@ function show(root, r) {
   $("#fs", out).addEventListener("input", e => { fl = +e.target.value; refresh(); });
   $("#fi", out).addEventListener("input", e => { const v = parseFloat(e.target.value); if (v >= 0 && v <= 1) { fl = v; refresh(); } });
   $("#sd", out).addEventListener("input", e => { seed = +e.target.value || 0; refresh(); });
-  $("#add", out).addEventListener("click", async () => {
+  $("#add", out).addEventListener("click", async e => {
+    const btn = e.currentTarget; if (btn.disabled) return; btn.disabled = true; setTimeout(() => btn.disabled = false, 1500); // skydd mot dubbelklick
     await put("items", { id: uid(), mhn: out._mhn || mhnFor(s, null), qty: 1, float: +fl.toFixed(8), seed, nametag: r.nametag || "", stickers: r.stickers, source: "inspect", added: Date.now() });
     toast("Tillagd i inventory");
   });

@@ -19,22 +19,26 @@ import { renderShare } from "./views/share.js";
 import { skeletonCards } from "./views/common.js";
 import { initUpdateCheck, checkPriceAge, checkBackupReminder } from "./upkeep.js";
 import { renderFloats } from "./views/floats.js";
+import { renderSettings } from "./views/settings.js";
+import { renderCombo } from "./views/combo.js";
+import { renderDeals } from "./views/deals.js";
 
 const NAV = [
   { g: "" , items: [["overview", "Overview", "◧"]] },
   { g: "Collect", items: [["inventory", "My Inventory", "▤"], ["collections", "Collection Tracker", "▣"], ["watchlist", "Watchlist", "☆"]] },
-  { g: "Explore", items: [["database", "Database", "☰"], ["colors", "Color Explorer", "◐"]] },
+  { g: "Explore", items: [["database", "Database", "☰"], ["colors", "Color Explorer", "◐"], ["combo", "Combo Finder", "✧"]] },
   { g: "Create", items: [["loadout", "Loadout Builder", "⚒"], ["workshop", "Sticker Workshop", "✦"]] },
-  { g: "Analyze", items: [["market", "Market & Prices", "↗"], ["inspect", "Inspect & Float", "◎"], ["tradeup", "Trade-up", "⇪"], ["patterns", "Pattern Explorer", "❖"], ["compare", "Skin Comparison", "⇄"], ["floats", "Float Ranking", "≋"], ["tools", "Tools", "∑"]] },
+  { g: "Analyze", items: [["market", "Market & Prices", "↗"], ["deals", "Dagens fynd", "✦"], ["inspect", "Inspect & Float", "◎"], ["tradeup", "Trade-up", "⇪"], ["patterns", "Pattern Explorer", "❖"], ["compare", "Skin Comparison", "⇄"], ["floats", "Float Ranking", "≋"], ["tools", "Tools", "∑"]] },
+  { g: "", items: [["settings", "Inställningar", "⚙"]] },
 ];
 const TABS = [["overview", "Översikt", "◧"], ["inventory", "Inventory", "▤"], ["database", "Databas", "☰"], ["colors", "Färger", "◐"], ["menu", "Mer", "⋯"]];
 
 const ROUTES = {
-  overview: r => renderOverview(r), inventory: (r, a) => renderInventory(r, ["holdings", "trades", "profit", "analysis"].includes(a[0]) ? a[0] : undefined), watchlist: r => renderWatchlist(r),
+  overview: r => renderOverview(r), inventory: (r, a) => renderInventory(r, ["holdings", "trades", "profit", "analysis", "sell"].includes(a[0]) ? a[0] : undefined), watchlist: r => renderWatchlist(r),
   database: (r, a) => renderList(r, { kind: a[0] }), item: (r, a) => renderItem(r, a[0]), collection: (r, a) => renderCollection(r, a[0]),
-  colors: r => renderColors(r), inspect: (r, a) => renderInspect(r, a), tradeup: r => renderTradeup(r), patterns: (r, a) => renderPatterns(r, a), collections: (r, a) => renderCollections(r, a), compare: (r, a) => renderCompare(r, a), share: (r, a) => renderShare(r, a[0]), floats: r => renderFloats(r), loadout: (r, a) => renderLoadout(r, a), workshop: (r, a) => renderWorkshop(r, a), market: r => renderMarket(r), tools: r => renderTools(r),
+  colors: r => renderColors(r), inspect: (r, a) => renderInspect(r, a), tradeup: r => renderTradeup(r), patterns: (r, a) => renderPatterns(r, a), collections: (r, a) => renderCollections(r, a), compare: (r, a) => renderCompare(r, a), share: (r, a) => renderShare(r, a[0]), floats: r => renderFloats(r), loadout: (r, a) => renderLoadout(r, a), workshop: (r, a) => renderWorkshop(r, a), market: r => renderMarket(r), tools: r => renderTools(r), settings: r => renderSettings(r), deals: r => renderDeals(r), combo: (r, a) => renderCombo(r, a),
 };
-const TITLES = { overview: "Overview", inventory: "My Inventory", watchlist: "Watchlist", database: "Database", item: "Database", collection: "Database", colors: "Color Explorer", loadout: "Loadout Builder", workshop: "Sticker Workshop", market: "Market & Prices", inspect: "Inspect & Float", tradeup: "Trade-up Calculator", patterns: "Pattern Explorer", collections: "Collection Tracker", compare: "Skin Comparison", share: "Delad samling", floats: "Float Ranking", tools: "Tools" };
+const TITLES = { overview: "Overview", inventory: "My Inventory", watchlist: "Watchlist", database: "Database", item: "Database", collection: "Database", colors: "Color Explorer", loadout: "Loadout Builder", workshop: "Sticker Workshop", market: "Market & Prices", inspect: "Inspect & Float", tradeup: "Trade-up Calculator", patterns: "Pattern Explorer", collections: "Collection Tracker", compare: "Skin Comparison", share: "Delad samling", floats: "Float Ranking", tools: "Tools", settings: "Inställningar", deals: "Dagens fynd", combo: "Combo Finder" };
 const SECTION = { item: "database", collection: "database" };
 
 $("#nav").innerHTML = NAV.map(g => (g.g ? `<div class="grp">${g.g}</div>` : "") + g.items.map(([k, l, i]) => `<a href="#/${k}" data-r="${k}"><span class="ico">${i}</span>${l}</a>`).join("")).join("");
@@ -44,6 +48,7 @@ $("#menuBtn").addEventListener("click", () => side.classList.toggle("open"));
 $("#tabbar [data-r=menu]").addEventListener("click", e => { e.preventDefault(); side.classList.toggle("open"); });
 document.addEventListener("click", e => { if (side.classList.contains("open") && !e.target.closest(".side") && !e.target.closest("#menuBtn") && !e.target.closest("[data-r=menu]")) side.classList.remove("open"); if (e.target.closest("#nav a")) side.classList.remove("open"); });
 
+$("#skipLink").addEventListener("click", () => $("#view").focus());
 // Offline-banner och vänlig hantering av oväntade fel
 const net = () => { $("#netBanner").hidden = navigator.onLine; };
 addEventListener("online", net); addEventListener("offline", net); net();
@@ -51,7 +56,7 @@ addEventListener("unhandledrejection", e => { console.error(e.reason); toast("N�
 
 let token = 0;
 async function route() {
-  const [, name = "overview", ...args] = location.hash.split("/").map(decodeURIComponent);
+  const [, name = "overview", ...args] = location.hash.split("/").map(s => { try { return decodeURIComponent(s); } catch { return s; } }); // trasig %-kodning får inte krascha routern
   const fn = ROUTES[name] || ROUTES.overview;
   const key = SECTION[name] || (ROUTES[name] ? name : "overview");
   $$("[data-r]").forEach(a => a.classList.toggle("on", a.dataset.r === key));
@@ -64,7 +69,11 @@ async function route() {
     if (my === token) view.innerHTML = `<div class="empty"><b>Något gick fel</b><br><span class="small">${esc(e.message)}</span></div>`;
     console.error(e);
   }
-  if (my === token) scrollTo(0, 0);
+  if (my === token) {
+    scrollTo(0, 0);
+    document.title = (TITLES[name] || "Overview") + " · CS2 Hub"; // skärmläsare och flikar ser var man är
+    if (!route.first) route.first = true; else view.focus({ preventScroll: true }); // flytta fokus till innehållet vid sidbyte (inte vid första laddningen)
+  }
 }
 
 function setStatus() {
@@ -75,7 +84,7 @@ function setStatus() {
 
 async function init() {
   $("#view").innerHTML = skeletonCards(12);
-  try { await loadData(); } catch (e) { $("#view").innerHTML = `<div class="empty"><div class="empty-ico">!</div><b>Kunde inte ladda databasen</b><div class="muted small" style="margin:6px 0 14px">${esc(e.message)}<br>Kontrollera din internetanslutning och försök igen.</div><button class="btn" onclick="location.reload()">Försök igen</button></div>`; return; }
+  try { await loadData(); } catch (e) { $("#view").innerHTML = `<div class="empty"><div class="empty-ico">!</div><b>Kunde inte ladda databasen</b><div class="muted small" style="margin:6px 0 14px">${esc(e.message)}<br>Kontrollera din internetanslutning och försök igen.</div><button class="btn" id="retryBoot">Försök igen</button></div>`; $("#retryBoot").addEventListener("click", () => location.reload()); return; }
   initSearch($("#globalSearch"), q => searchDatabase(q));
   await loadSettings();
   await setPriceMode(await getKV("priceMode", "market"));
@@ -86,7 +95,7 @@ async function init() {
   await route();
   startWatchPolling(); notifyNewHits();
   initUpdateCheck(); checkPriceAge(); checkBackupReminder();
-  refreshLive(m => $("#priceStatus").textContent = m).then(async ok => { setStatus(); checkPriceAge(); await recordSnapshot(); if (ok) { const n = (location.hash.split("/")[1] || "overview"); if (["overview", "inventory", "market"].includes(n)) route(); } });
+  refreshLive(m => $("#priceStatus").textContent = m).then(async ok => { setStatus(); checkPriceAge(); await recordSnapshot(); notifyNewHits(); if (ok) { const n = (location.hash.split("/")[1] || "overview"); if (["overview", "inventory", "market"].includes(n)) route(); } });
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => { });
 }
 init();

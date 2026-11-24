@@ -1,7 +1,8 @@
-import { esc, imgUrl, kr, krm, pct, cls, usd2sek, modal, toast, uid, $, fmtDate, fmtDateTime, WEAR_LONG, MISSING, confirmBox } from "../util.js";
+import { esc, parseDec, imgUrl, kr, krm, pct, cls, usd2sek, modal, toast, uid, $, fmtDate, fmtDateTime, WEAR_LONG, MISSING, confirmBox } from "../util.js";
 import { all, put, putMany, del } from "../store.js";
 import { D, lookup, bestUsd, mhnFor, priceInfo, refreshLive } from "../data.js";
 import { pageHead, itemPicker, emptyState } from "./common.js";
+import { watchBanner } from "../upkeep.js";
 
 const hit = (w, cur) => cur != null && (w.dir === "below" ? cur <= w.target : cur >= w.target);
 
@@ -20,6 +21,7 @@ export async function notifyNewHits() {
   }
   if (changed) await putMany("watch", ws);
   if (!fresh.length) return 0;
+  watchBanner(fresh);
   if ("Notification" in window && Notification.permission === "granted") {
     for (const w of fresh.slice(0, 3)) new Notification("Målpris nått", { body: `${w.mhn}: ${kr(usd2sek(bestUsd(w.mhn)))} (mål ${w.dir === "below" ? "≤" : "≥"} ${kr(w.target)})`, tag: "w" + w.id });
   }
@@ -38,15 +40,18 @@ export function addWatch(mhn, done) {
     <div class="form"><label class="full">Föremål<input class="inp" id="wm" value="${esc(mhn)}" readonly></label>
     ${e?.wr?.length ? `<label>Slitage<select class="inp" id="ww">${e.wr.map(w => `<option value="${w}" ${ref.wear === w ? "selected" : ""}>${WEAR_LONG[w]}</option>`).join("")}</select></label>${e.st ? `<label>Variant<select class="inp" id="wv"><option value="">Normal</option><option value="st" ${ref.st ? "selected" : ""}>StatTrak™</option></select></label>` : ""}` : ""}
     <label>Avisera när priset är<select class="inp" id="wd"><option value="below">under eller lika med</option><option value="above">över eller lika med</option></select></label>
-    <label>Målpris (kr)<input class="inp" id="wt" type="number" min="0" step="1" value="${cur ? Math.round(cur * 0.9) : ""}"></label></div>
+    <label>Målpris (kr)<input class="inp" id="wt" type="text" inputmode="decimal" placeholder="t.ex. 150" value="${cur ? Math.round(cur * 0.9) : ""}"></label></div>
     <p class="muted small" id="wn">Nuvarande pris: ${cur != null ? "<b>" + kr(cur) + "</b>" : MISSING}</p>
     <div class="row" style="margin-top:12px;justify-content:flex-end"><button class="btn ghost" data-close>Avbryt</button><button class="btn" id="ws">Spara</button></div>`, {
     onMount: (m, close) => {
       const name = () => e?.wr?.length ? mhnFor(e, m.querySelector("#ww").value, { st: m.querySelector("#wv")?.value === "st" }) : mhn;
       const upd = () => { const n = name(); m.querySelector("#wm").value = n; const c = usd2sek(bestUsd(n)); m.querySelector("#wn").innerHTML = "Nuvarande pris: " + (c != null ? "<b>" + kr(c) + "</b>" : MISSING); if (c != null) m.querySelector("#wt").value = Math.round(c * 0.9); };
       m.querySelectorAll("#ww,#wv").forEach(x => x.addEventListener("change", upd));
+      let busy = false;
       m.querySelector("#ws").addEventListener("click", async () => {
-        const target = +m.querySelector("#wt").value; if (!(target > 0)) return toast("Ange ett målpris");
+        if (busy) return; // skydd mot dubbelklick
+        const target = parseDec(m.querySelector("#wt").value); if (!(target > 0)) return toast("Ange ett målpris, t.ex. 150");
+        busy = true;
         const n = name(), startUsd = bestUsd(n);
         await put("watch", { id: uid(), mhn: n, target, dir: m.querySelector("#wd").value, created: Date.now(), startUsd: startUsd ?? null });
         close(); toast("Tillagd i bevakningslistan"); done && done();

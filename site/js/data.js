@@ -1,6 +1,6 @@
 import { getKV, setKV } from "./store.js";
 import { setRate, fx, WEAR_LONG, WEARS } from "./util.js";
-import { PRICES_URL } from "./config.js";
+import { PRICES_URL, HISTORY_URL } from "./config.js";
 
 export const D = {
   skins: [], stickers: [], other: [], collections: [], catalog: [],
@@ -43,7 +43,7 @@ export async function loadData(onStatus = () => { }) {
   D.skins = skins; D.stickers = stickers; D.other = other; D.collections = collections;
   if (prices) { D.P = prices; D.priceAge = prices.t * 1000; }
   // Färskare prissnapshot från förra besöket (hämtad från grenen "prices") går före den inbyggda filen
-  try { const c = await getKV("pricesCache"); if (c?.data?.p && c.data.t > (D.P.t || 0)) { D.P = c.data; D.priceAge = c.data.t * 1000; } } catch { /* ignorera */ }
+  try { const c = await getKV("pricesCache"); if (okPrices(c?.data) && c.data.t > (D.P.t || 0)) { D.P = c.data; D.priceAge = c.data.t * 1000; } } catch { /* ignorera */ }
   applyTrend();
   for (const c of collections) D.colById.set(c.id, c);
 
@@ -200,22 +200,36 @@ export function resetPriceCache() { D.skins.concat(D.stickers, D.other).forEach(
 export function lookup(mhn) { return D.mhn.get(mhn) || null; }
 export function imgOf(entry) { return entry?.img || ""; }
 
+/** Kontrollerar att en prisfil (från nätet eller lokal cache) har rätt form innan den används – skadad eller manipulerad data ska aldrig nå gränssnittet. */
+function okPrices(j) {
+  if (!j || typeof j !== "object" || !Number.isFinite(j.t) || j.t * 1000 > Date.now() + 864e5 || j.t < 1e9) return false;
+  if (!j.p || typeof j.p !== "object" || Array.isArray(j.p)) return false;
+  const vals = Object.values(j.p); if (!vals.length) return false;
+  const rowOk = r => Array.isArray(r) && r.length <= 12 && r.every(x => x == null || (typeof x === "number" && x >= 0 && x < 1e7));
+  const step = Math.max(1, Math.floor(vals.length / 400)); // stickprov över hela filen
+  for (let i = 0; i < vals.length; i += step) if (!rowOk(vals[i])) return false;
+  if (j.tr != null && (typeof j.tr !== "object" || Array.isArray(j.tr))) return false;
+  return true;
+}
+const okHistory = j => j && Array.isArray(j.d) && j.d.length <= 400 && j.d.every(x => typeof x === "string" && /^\d{4}-\d{2}-\d{2}$/.test(x)) && j.p && typeof j.p === "object" && !Array.isArray(j.p) && Object.values(j.p).slice(0, 200).every(s => Array.isArray(s) && s.length === j.d.length && s.every(x => x == null || (typeof x === "number" && x >= 0 && x < 1e7)));
+
 /* ------------- levande uppdatering (Steam-priser + valuta) med cache ------------- */
 export async function refreshLive(onStatus = () => { }, force = false) {
   // valuta
   try {
-    let c = await getKV("fx");
-    if (!c || Date.now() - c.t > 12 * 3600e3) {
+    let c = await getKV("fx"); const okFx = x => x && Number.isFinite(x.t) && Number.isFinite(x.rate) && x.rate > 1 && x.rate < 100;
+    if (!okFx(c) || Date.now() - c.t > 12 * 3600e3) {
       const j = await json("https://open.er-api.com/v6/latest/USD");
-      c = { t: Date.now(), rate: j.rates.SEK };
+      c = { t: Date.now(), rate: +j.rates.SEK };
+      if (!okFx(c)) throw new Error("ogiltig växelkurs");
       await setKV("fx", c);
     }
     setRate(c.rate); fx.updated = c.t;
-  } catch { const c = await getKV("fx"); if (c) { setRate(c.rate); fx.updated = c.t; } }
+  } catch { const c = await getKV("fx"); if (c && Number.isFinite(c.rate) && Number.isFinite(c.t)) { setRate(c.rate); fx.updated = c.t; } }
   // Priser: ingen prisleverantör anropas från webbläsaren (de saknar CORS). GitHub Actions publicerar en färsk snapshot
   // på grenen "prices" (en enda commit, så repot växer inte). Den hämtas högst en gång i timmen och cachas lokalt.
   // Reserv: den inbyggda data/prices.json.
-  const take = async j => { if (j?.p && j.t * 1000 > D.priceAge) { D.P = j; D.priceAge = j.t * 1000; resetPriceCache(); await setKV("pricesCache", { t: j.t, data: j }); return true; } return false; };
+  const take = async j => { if (okPrices(j) && j.t * 1000 > D.priceAge) { D.P = j; D.priceAge = j.t * 1000; resetPriceCache(); await setKV("pricesCache", { t: j.t, data: j }); return true; } return false; };
   try {
     const last = await getKV("pricesFetched", 0);
     if (force || Date.now() - last > 3600e3) {
@@ -230,6 +244,29 @@ export async function refreshLive(onStatus = () => { }, force = false) {
   D.live = Date.now() - D.priceAge < 36 * 3600e3;
   return D.live;
 }
+/* ---- Egen prishistorik (history.json på grenen "prices"): hämtas första gången den behövs, cachas 6 timmar ---- */
+let hist = null, histP = null, histFail = 0;
+export function loadHistory() {
+  if (!histP && Date.now() - histFail < 5 * 60e3) return Promise.resolve(hist); // misslyckades nyss: försök inte igen för varje föremål man öppnar
+  if (!histP) histP = (async () => {
+    try { const c = await getKV("histCache"); if (c && Number.isFinite(c.t) && okHistory(c.data) && Date.now() - c.t < 6 * 3600e3) return (hist = c.data); } catch { /* ignorera */ }
+    try {
+      const r = await fetch(HISTORY_URL, { cache: "no-cache" });
+      if (r.ok) { const j = await r.json(); if (okHistory(j)) { hist = j; try { await setKV("histCache", { t: Date.now(), data: j }); } catch { /* ignorera */ } return j; } }
+    } catch { /* offline eller saknas */ }
+    return hist;
+  })().then(v => { if (!v) { histP = null; histFail = Date.now(); } return v; });
+  return histP;
+}
+/** [{x: tid, y: USD}] för ett marknadsnamn, eller null om historik saknas helt. */
+export function historyFor(mhn) {
+  const s = hist?.p?.[mhn]; if (!s) return null;
+  const out = []; for (let i = 0; i < hist.d.length; i++) if (s[i] != null) out.push({ x: Date.parse(hist.d[i] + "T12:00:00Z"), y: s[i] });
+  return out;
+}
+export const historyDays = () => hist?.d?.length || 0;
+export const historyNames = () => hist ? Object.keys(hist.p) : [];
+
 export function applyTrend() {
   D.trend.clear();
   for (const [k, v] of Object.entries(D.P.tr || {})) D.trend.set(k, v);
