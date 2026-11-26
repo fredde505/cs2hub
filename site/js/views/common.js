@@ -1,4 +1,4 @@
-import { esc, imgUrl, krUsd, MISSING, COLORS, debounce } from "../util.js";
+import { esc, imgUrl, krUsd, MISSING, COLORS, debounce, searchTerms } from "../util.js";
 import { D, fromPrice, mhnFor, priceInfo, priceTip } from "../data.js";
 
 export const KINDS = [
@@ -39,7 +39,8 @@ export function itemPicker(host, onPick, { kinds = null, placeholder = "Sök fö
   const run = debounce(() => {
     const q = inp.value.trim().toLowerCase();
     if (q.length < 2) { list.hidden = true; return; }
-    const terms = q.split(/\s+/);
+    const terms = searchTerms(q);
+    if (!terms.length) { list.hidden = true; return; }
     const hits = [];
     for (const e of D.catalog) {
       if (kinds && !kinds.includes(e.kind)) continue;

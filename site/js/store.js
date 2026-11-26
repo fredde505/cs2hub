@@ -1,6 +1,7 @@
 // All användardata lever lokalt i webbläsarens IndexedDB – ingen server behövs.
-const DB_NAME = "cs2hub", VERSION = 1;
-const STORES = { items: "id", trades: "id", snapshots: "ts", watch: "id", loadouts: "id", kv: "key" };
+import { buildBackup, BACKUP_STORES, KEY_OF } from "./backup-core.js";
+const DB_NAME = "cs2hub", VERSION = 2; // v2: lagret "safety" (säkerhetskopia före senaste återställning)
+const STORES = { items: "id", trades: "id", snapshots: "ts", watch: "id", loadouts: "id", kv: "key", safety: "id" };
 let dbp;
 
 function open() {
@@ -45,27 +46,42 @@ export async function getKV(key, def = null) {
 }
 export const setKV = (key, value) => put("kv", { key, value });
 
-export async function exportAll() {
-  const out = { app: "cs2hub", version: 1, exported: Date.now() };
-  for (const s of Object.keys(STORES)) out[s] = await all(s);
-  out.kv = (out.kv || []).filter(r => !["pricesCache", "histCache"].includes(r.key)); // stora cachefiler hör inte hemma i en backup
+/** Allt som ingår i en backup, som { lager: [poster] }. */
+export async function readStores() {
+  const out = {};
+  for (const s of BACKUP_STORES) out[s] = await all(s);
   return out;
 }
-export async function importAll(data) {
-  if (!data || data.app !== "cs2hub") throw new Error("Ogiltig backupfil");
-  // Ingen känd tabell som lista = trasig fil: avbryt INNAN något rensas, så att befintlig data aldrig går förlorad
-  if (!Object.keys(STORES).some(s => Array.isArray(data[s]))) throw new Error("Backupfilen innehåller ingen data");
-  // Backupfilen är opålitlig indata: tvätta tal så att de aldrig kan bära HTML.
-  const num = (v, d = 0) => Number.isFinite(+v) ? +v : d;
-  const clean = {
-    items: l => l.filter(i => i && typeof i.id === "string" && typeof i.mhn === "string").map(i => ({ ...i, qty: Math.max(1, Math.floor(num(i.qty, 1))), float: i.float == null ? null : num(i.float, null), seed: i.seed == null ? null : num(i.seed, null) })),
-    trades: l => l.filter(t => t && typeof t.id === "string" && typeof t.mhn === "string").map(t => ({ ...t, type: t.type === "sell" ? "sell" : "buy", qty: Math.max(1, Math.floor(num(t.qty, 1))), price: num(t.price), fee: num(t.fee), date: num(t.date, Date.now()), created: num(t.created) })),
-    watch: l => l.filter(w => w && typeof w.id === "string" && typeof w.mhn === "string" && Number.isFinite(+w.target) && +w.target > 0).map(w => ({ ...w, target: +w.target, dir: w.dir === "above" ? "above" : "below", created: num(w.created, Date.now()), startUsd: w.startUsd == null ? null : num(w.startUsd, null), notified: null })),
-    snapshots: l => l.filter(s => s && Number.isFinite(+s.ts)).map(s => ({ ts: +s.ts, steam: num(s.steam), cash: num(s.cash), cost: num(s.cost) })),
+/** Backupobjekt (format 2, med kontrollsumma). */
+export async function exportAll() { return buildBackup(await readStores()); }
+
+/**
+ * Skriver flera lager i EN transaktion: lyckas något inte, avbryts allt och databasen är som förut (inget halvt resultat).
+ * payload: { lager: [poster] }. replace=true tömmer lagret först (inställningar, "kv", töms aldrig – de skrivs bara över).
+ */
+export async function applyStores(payload, { replace = false, deletes = {} } = {}) {
+  // deletes: { lager: [nycklar] } tas bort i samma transaktion (används av Steam-importen)
+  const names = BACKUP_STORES.filter(n => Array.isArray(payload[n]) || Array.isArray(deletes[n]));
+  const memApply = () => {
+    const snap = Object.fromEntries(names.map(n => [n, new Map(mem[n])]));
+    try { for (const n of names) { if (replace && n !== "kv") mem[n].clear(); for (const k of deletes[n] || []) mem[n].delete(k); for (const o of payload[n] || []) mem[n].set(o[KEY_OF[n]], o); } } catch (e) { for (const n of names) mem[n] = snap[n]; throw e; }
   };
-  for (const s of Object.keys(STORES)) {
-    await clear(s);
-    const list = Array.isArray(data[s]) ? data[s] : [];
-    if (list.length) await putMany(s, clean[s] ? clean[s](list) : list);
-  }
+  if (useMem) return memApply();
+  let db; try { db = await open(); } catch { useMem = true; return memApply(); }
+  await new Promise((res, rej) => {
+    let t; try { t = db.transaction(names, "readwrite"); } catch (e) { return rej(e); }
+    try { for (const n of names) { const st = t.objectStore(n); if (replace && n !== "kv") st.clear(); for (const k of deletes[n] || []) st.delete(k); for (const o of payload[n] || []) st.put(o); } }
+    catch (e) { try { t.abort(); } catch { /* redan avbruten */ } return rej(e); } // en ogiltig post mitt i får aldrig lämna en halv databas
+    t.oncomplete = () => res();
+    t.onerror = () => rej(t.error);
+    t.onabort = () => rej(t.error || new Error("avbröts"));
+  }).catch(e => { throw new Error("Det gick inte att spara – ingenting ändrades i din databas (" + (e?.message || e) + ")"); });
 }
+
+/** Sparar en säkerhetskopia av nuläget (ett enda exemplar, skrivs över) så att en återställning kan ångras. */
+export async function saveSafety() {
+  const data = await exportAll();
+  await put("safety", { id: "last", t: Date.now(), data });
+  return data;
+}
+export const getSafety = async () => (await all("safety")).find(x => x.id === "last") || null;

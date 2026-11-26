@@ -1,0 +1,1640 @@
+=====================================================================
+  CS2 HUB – KOMPLETT DOKUMENTATION
+=====================================================================
+Senast uppdaterad: 2026-11-25 (se 18e för senaste uppgraderingen)
+Språk i appen: svenska (produktnamn som "My Inventory", "Database" m.fl. är engelska).
+
+Innehåll
+  1.  Vad är CS2 Hub?
+  2.  Adresser och var allt ligger
+  3.  Hur det är byggt (arkitektur)
+  4.  Mappar och filer
+  5.  Data: varifrån den kommer och hur den byggs
+  6.  Prissystemet (viktigt!)
+  7.  Design och utseende
+  8.  Sida för sida: vad finns och hur fungerar det
+  9.  Så sparas din data (IndexedDB) och backup
+ 10.  Formler och beräkningar
+ 11.  Säkerhet och integritet
+ 12.  Prestanda och gratisgränser
+ 13.  Publicering och uppdatering (GitHub + Cloudflare)
+ 14.  Steam-importen och proxyn
+ 15.  Köra lokalt
+ 16.  Testning
+ 17.  Kända begränsningar
+ 18.  Felsökning
+ 19.  Idéer för framtiden
+
+
+=====================================================================
+1. VAD ÄR CS2 HUB?
+=====================================================================
+En helt gratis webbplats för Counter-Strike 2-spelare, handlare och
+samlare. Den samlar på ett ställe:
+
+  - Collect   : följ ditt eget inventory, vad du betalade och din vinst
+  - Explore   : en komplett databas över spelets föremål + färgfiltrering
+  - Create    : bygg loadouts och testa stickers/charms på vapen
+  - Analyze   : prisjämförelse, inspect-länkar, float, trade-ups, mönster
+
+Det är en STATISK sida: inga serverprogram, ingen databas hos någon
+annan. All din personliga data (inventory, köp, loadouts, bevakningar)
+sparas bara i din egen webbläsare. Det gör sidan gratis att driva och
+snabb.
+
+
+=====================================================================
+2. ADRESSER OCH VAR ALLT LIGGER
+=====================================================================
+  Hemsidan (Cloudflare):
+      https://sweet-resonance-74f4.leonnordstrom08.workers.dev
+  Steam-proxyn (Cloudflare Worker):
+      https://steam-proxy.leonnordstrom08.workers.dev
+  Koden (GitHub, offentligt repo):
+      https://github.com/fredde505/cs2hub
+  Lokal mapp på datorn:
+      Skrivbordet\CS2 Hub
+
+  Flöde: du ändrar filer på GitHub -> Cloudflare bygger och publicerar
+  sidan automatiskt. En GitHub Action hämtar nya priser var 6:e timme
+  och committar dem, vilket också triggar ett nytt bygge.
+
+
+=====================================================================
+3. HUR DET ÄR BYGGT (ARKITEKTUR)
+=====================================================================
+  - Ren HTML + CSS + JavaScript (ES-moduler). Inget ramverk, inget
+    bygg-steg, inget npm.
+  - Routing med "hash" i adressen, t.ex. #/inventory, #/item/<id>.
+  - Data: färdiga JSON-filer i site/data/ som laddas när sidan startar.
+  - Användardata: IndexedDB i webbläsaren (se avsnitt 9).
+  - Service worker (sw.js): data visas direkt från cache och uppdateras
+    i bakgrunden; appens egna filer hämtas nätverk-först med cache som
+    reserv offline.
+  - Installerbar som app (manifest + ikoner).
+  - Python används bara för att BYGGA data (tools/build_data.py) och
+    för en lokal testserver (tools/serve.py).
+  - Cloudflare Worker (worker/steam-proxy.js) är en liten mellanhand för
+    Steam-importen, eftersom Steam inte tillåter direktanrop från en
+    webbsida (CORS).
+
+
+=====================================================================
+4. MAPPAR OCH FILER
+=====================================================================
+Rotmappen
+  README.md             Kort översikt
+  DEPLOY.md             Steg-för-steg-guide för Cloudflare/GitHub
+  DOKUMENTATION.txt     Den här filen
+  Starta CS2 Hub.bat    Dubbelklicka för att köra sidan lokalt
+  wrangler.jsonc        Talar om för Cloudflare att mappen "site" ska
+                        publiceras (namn: sweet-resonance-74f4)
+  .gitignore            Filer som inte ska till GitHub
+  .github/workflows/prices.yml
+                        Schemalagt jobb: bygger priser var 6:e timme och
+                        publicerar dem på grenen "prices"
+  worker/steam-proxy.js Koden för Steam-proxyn (klistras in i Cloudflare)
+
+site/  (det som publiceras)
+  index.html            Skalet: sidomeny, topprad, sökruta, vyyta
+  manifest.webmanifest  Gör att sidan kan installeras som app
+  sw.js                 Service worker (cache)
+  version.txt           Versionsnummer (skrivs av Cloudflare-bygget)
+  _headers              Cache-regler för Cloudflare (kod no-cache,
+                        data 15 min)
+  icons/                Appikoner (192, 512, maskable, Apple)
+  css/app.css           All design
+  data/                 Färdig data (se avsnitt 5)
+  js/
+    app.js              Start, router, meny, status, felhantering
+    util.js             Hjälpfunktioner: formatering, dialoger, graf
+    store.js            IndexedDB-lagret + export/import av backup
+    data.js             Laddar data, prissystemet, marknader, avgifter
+    config.js           Proxy-adress och adress till prissnapshoten
+    upkeep.js           Banners: ny version, gamla priser, backup-påminnelse,
+                        bevakning nådd
+    views/settings.js   Inställningar
+    views/combo.js      Combo Finder
+    views/deals.js      Dagens fynd
+    views/invest.js     Investeringsradar (stabila/stigande/fallande skins)
+    views/calc.js       Price Calculator (köp/sälj, avgifter, två marknader)
+    snapshot.js         Sparar värdemätpunkter (egen modul så startsidan inte laddar Inventory)
+    money-core.js       Visningsvaluta: kurser, formatering, omräkning (ren logik)
+    combo-core.js       Combo Finder: kandidater, kombinationer, Loadout/Workshop-länk
+    prefs-core.js       Inställningar: alternativ, tvätt, tema, bildskala (ren logik)
+    prefs.js            Läser/sparar inställningar och tillämpar dem på sidan
+    theme-boot.js       Sätter tema före första målning (läser localStorage-spegel)
+    tradeup-core.js     Trade-up: regler, float, utfall, EV, risk, break-even
+    pattern-core.js     Pattern Explorer: rank, filter, förklaring, liknande seeds
+    inspect-core.js     Inspect: float-position, slitagegränser, jämförelse
+    watch-core.js       Watchlist: mål i kr/%, paus, grupper, sammanfattning
+    compare-core.js     Skin Comparison: utveckling, bäst-markering, sammanfattning
+    sticker-core.js     Sticker Finder: färgmatchning, kombinationer, Workshop-länk
+    views/stickers.js   Sticker Finder-vyn
+    planner-core.js     Collection Planner: köpordning, budget, mål, sortering
+    portfolio-core.js   Portfolio Analytics: perioder, förändring, koncentration, ägartid
+    views/portfolio.js  Portfolio-fliken i My Inventory
+    steam-core.js       Tolkning av Steam-inventory och importplan (ren logik)
+    inv-logic.js        Inventory-filter och försäljning ur lagret (ren logik)
+    views/backup-ui.js  Backup med ett klick, förhandsvisning vid återställning, ångra
+    pricing.js          Prisstatus/avvikelser, köp/sälj-matematik, prisstatistik (ren logik)
+    backup-core.js      Backupformat v2: validering, migrering, tvätt, kontrollsumma
+    tests.js            Automatiska tester (körs via site/tests.html)
+  site/tests.html       Testsida: öppna http://localhost:5173/tests.html
+    views/card.js       Delbart bildkort (PNG)
+  tools/history.py      Bygger prishistoriken (körs av GitHub Action)
+    finance.js          Vinstmotorn (inköp, försäljning, positioner)
+    config.js           Valfri adress till din egen Steam-proxy
+    search.js           Global sökning med förslag
+    inspect-decode.js   Avkodar inspect-länkar helt i webbläsaren
+    views/
+      overview.js       Översikten
+      inventory.js      My Inventory (största filen)
+      steam-import.js   Hämta Steam-inventory
+      watchlist.js      Prisbevakning + webbläsarnotiser
+      collections.js    Collection Tracker
+      database.js       Databaslistor, föremålssidor, samlingssidor
+      colors.js         Color Explorer + Match My Skin
+      loadout.js        Loadout Builder
+      workshop.js       Sticker & Charm Workshop
+      inspect.js        Inspect & Float
+      tradeup.js        Trade-up Calculator
+      patterns.js       Pattern Explorer
+      compare.js        Skin Comparison
+      floats.js         Float Ranking
+      tools.js          Tools (Sell Calculator) + Market & Prices
+      share.js          Dela samling (länk) + kodning/avkodning
+      common.js         Delade bitar: föremålskort, sökväljare, mm.
+
+tools/
+  build_data.py         Bygger data/*.json (schema, färger, priser,
+                        mönster). Kräver Python 3 + Pillow.
+  serve.py              Lokal testserver utan cache (port 5173)
+  .cache/               Mellanlagring (kommer inte till GitHub)
+
+worker/
+  steam-proxy.js        Koden för Cloudflare-workern "steam-proxy"
+
+
+=====================================================================
+5. DATA: VARIFRÅN DEN KOMMER OCH HUR DEN BYGGS
+=====================================================================
+Källor (alla gratis)
+  - Föremålsschema: ByMykel/CSGO-API (spelets item-schema)
+  - Bilder: Steams och spelets CDN (laddas direkt från dem)
+  - Priser: prices.csgotrader.app (Steam Market, Skinport, BUFF163,
+    CSFloat, CS.MONEY, Swap.gg)
+  - Fade-procent: csgo-fade-percentage-calculator (MIT-licens)
+  - Blue Gem-procent: csgo-blue-gem-calculator (MIT-licens)
+  - Valutakurs USD->SEK: open.er-api.com (hämtas av webbläsaren,
+    cachas i 12 timmar; reserv 9,8 kr)
+
+Filer i site/data/
+  skins.json        2 246 skins (vapen, knivar, handskar) med: namn,
+                    vapen, mönster, kategori, rarity, float-intervall,
+                    slitagegrader, StatTrak/Souvenir, samlingar,
+                    paint index, vapnets defindex, "legacy"-flagga,
+                    beskrivning, bild + FÄRGANALYS (se nedan)
+  stickers.json     11 907 stickers
+  other.json        3 089 övriga: cases/capsules, charms, agents,
+                    music kits, patches, graffiti
+  collections.json  110 samlingar och vilka skins de innehåller
+  prices.json       Priser (USD) för ca 38 000 marknadsnamn + Steams
+                    pristrender (24 tim/7/30/90 dagar)
+  patterns.json     Fade-procent (27 vapen) och Blue Gem-procent
+                    (24 vapen) per seed 0-1000
+  meta.json         Byggdatum
+
+Färganalys (Color Explorer)
+  Varje skinbild analyseras i förväg: pixlar grupperas i färgnamn
+  (röd, orange, guld, grön, cyan, blå, lila, rosa, brun, svart, vit,
+  grå). Kromatiska färger går före grå/metall. Resultat per skin:
+    c1 / c2   primär och sekundär färg
+    p1 / p2   hur stor del av vapnets pixlar (procent)
+    mc        multicolor (minst tre färger)
+    hx        dominerande färg som hex
+  Alla 2 246 skins är klassade. Det är en uppskattning från bilder.
+
+Bygga om
+  python tools/build_data.py              allt (schema, färger, priser,
+                                          mönster)
+  python tools/build_data.py --prices     bara priser
+  python tools/build_data.py --patterns   bara mönsterdata
+  (Priser byggs normalt av GitHub Action, inte för hand.)
+
+Justeringar som görs vid inläsning (data.js)
+  - StatTrak/Souvenir-flaggor kontrolleras mot prisdata (schemat är
+    grovt).
+  - Vanilla-knivar saknar float -> float sätts till "ingen".
+  - 149 skins delar marknadsnamn (Doppler-faser, gamla modeller). De får
+    visningsnamn som "Phase 2", "Black Pearl", "Legacy" eller "#paintindex".
+    Nya modellen prioriteras när ett marknadsnamn ska kopplas till ett skin.
+
+
+=====================================================================
+6. PRISSYSTEMET (VIKTIGT!)
+=====================================================================
+Allt använder samma prisfunktion (priceInfo i data.js), så alla sidor
+visar samma pris.
+
+Källor och kolumner i prices.json (USD):
+  steam, skinport, buff163, csfloat, csmoney, swapgg, (buff163-köporder)
+
+Vad som visas som "pris" (standard = "Lägsta marknadspris")
+  - Lägsta UTROPSPRIS (listning, inte genomförd försäljning) bland
+    Skinport, CSFloat, CS.MONEY och Swap.gg. BUFF163 räknas inte med
+    (svårtillgänglig för de flesta).
+  - Visas i kronor (USD x dagens kurs).
+  - Valbart i sidomenyn "Prisvisning": byt till "Steam Market-pris".
+  - Varför inte Steam som standard? Steam-priser är i snitt ca 1,75 x
+    högre än externa marknader, eftersom Steam-krediter inte går att ta
+    ut. Det såg "jättedyrt" ut.
+
+"Pris saknas"
+  - Om ingen marknad har föremålet visas en gul streckad märkning
+    "Pris saknas" (aldrig 0 kr). Gäller kort, inventory, loadout,
+    workshop, trade-up, samlingar, bevakningar m.m.
+  - Medaljer, märken, mynt, Storage Unit, C4 m.fl. som inte går att
+    sälja visas i stället som "Ej säljbar" och räknas inte som saknat pris.
+
+Tre olika "värden" i inventory
+  1. Riktiga pengar (standard): NETTO efter marknadsavgift på
+     peer-to-peer-marknader (Skinport och CSFloat). Det du faktiskt får ut.
+  2. Steam-krediter: Steam Market-priset. Går bara att använda på Steam.
+  3. Marknadspris: lägsta listning (det som visas på korten).
+
+Avgiftsinställningar (Tools -> Sell Calculator)
+  Standard: Skinport 12 %, CSFloat 2 %, CS.MONEY 7 %, BUFF163 2,5 %,
+  Swap.gg 10 %, Steam 15 %. Du kan ändra varje avgift (sparas i
+  webbläsaren och används överallt för nettovärden). Steam-krediter
+  räknas som 70 % av riktiga pengar (kan ändras).
+
+Skydd mot konstiga priser
+  - Nettoberäkningen ignorerar ett pris som är mer än 1,6 x medianen av
+    de externa priserna (t.ex. Doppler-faser som feeden inte skiljer på).
+  - CS.MONEY och Swap.gg räknas inte i nettot (botsajter: deras säljpris
+    är inte vad de betalar).
+  - Priser under 1 kr får en varningsmarkering i Loadout Builder.
+
+Hur ofta uppdateras priserna?
+  - GitHub Action var 6:e timme bygger en ny prices.json och publicerar den
+    på grenen "prices" i repot (EN enda commit som skrivs över varje gång,
+    så Git-historiken på "main" växer inte). Sidan hämtar filen därifrån
+    (raw.githubusercontent.com, högst 1 gång/timme) och sparar den i
+    webbläsaren. Cloudflare bygger INTE om sidan vid prisuppdatering.
+  - Filen site/data/prices.json på "main" är bara en reserv som används om
+    grenen saknas eller man är offline.
+  - Sidan visar "Priser uppdaterade <datum>" längst ner i sidomenyn.
+  - Är priserna äldre än 24 timmar visas en gul banner överst ("Priserna
+    är ca X timmar/dagar gamla…"). Är datan äldre än 36 timmar står det
+    "Äldre prissnapshot" och föremålssidor varnar.
+  - Priserna hämtas INTE live från prisleverantören i webbläsaren (de
+    tillåter inte det). De är en snapshot byggd av GitHub Action.
+
+Uppskattat eller registrerat?
+  - Inventory-sidan har en utfällbar ruta "Så räknas siffrorna". Kort:
+    "Totalt värde" är en UPPSKATTNING (lägsta marknadspris minus avgift),
+    medan inköp, försäljningar och realiserad vinst bygger på de
+    transaktioner du själv registrerat.
+  - Saknas float/seed på ett köp används ditt glidande snittpris för
+    föremålet. Det markeras med "≈" (hovra/tryck för förklaring).
+  - Doppler/Gamma Doppler: feeden skiljer inte på faser. Ruby, Sapphire,
+    Black Pearl och Emerald kan vara värda mycket mer. Detta står som
+    varning på föremålssidan och som "fas ej prissatt" i inventory.
+
+
+=====================================================================
+7. DESIGN OCH UTSEENDE
+=====================================================================
+Grundstil
+  Mörk grafitfärgad bakgrund, diskreta grå nyanser, tunna avdelare,
+  tydlig typografi för pris och siffror. Färg används sparsamt: den
+  reserveras för rarity (färgade kantlister) och själva föremålen. En
+  enda accentfärg (varm gul/orange) används för logotyp, aktiv meny,
+  fokus och primära länkar.
+
+Färger (CSS-variabler)
+  Bakgrund            #111214
+  Paneler             #17191c   (upphöjda: #1c1f23)
+  Linjer              #26292e   (starkare: #31353b)
+  Text                #eceef1
+  Dämpad text         #9ba2ac   (svag: #7a818b)
+  Accent              #e9a23b
+  Positivt (vinst)    #7ec699
+  Negativt (förlust)  #e8857a
+  Varning "Pris saknas": gul text #d9b36a med streckad ram
+
+Typografi
+  Inter / systemets sans-serif för text. Monospace (Cascadia/SF Mono)
+  för priser på kort. Tabulära siffror så kolumner linjerar. Rubriker i
+  sidor 20 px; sektionsrubriker versaler 13 px med bokstavsavstånd.
+
+Layout
+  - Desktop: fast sidomeny till vänster (216 px) med grupperna
+    Collect / Explore / Create / Analyze, topprad med sökruta, innehåll
+    max 1400 px brett.
+  - Surfplatta/mobil: sidomenyn blir utfällbar (☰) och en flikrad nederst
+    (Översikt, Inventory, Databas, Färger, Mer). Brytpunkter 900, 760 och
+    420 px. Testat utan sidledes scroll ned till 320 px.
+  - Kort: bild på radial mörk bakgrund, tunn rarity-linje under bilden,
+    liten färgprick, namn, pris ("från" = billigaste slitage), små märken
+    ST/SV. Hover lyfter kortet lite.
+  - Knappar: primär = ljus fylld; sekundär = ram ("ghost"); farlig = röd.
+  - Dialogrutor: mörk ruta med mörk bakgrund bakom, Esc stänger.
+    Webbläsarens egna dialoger är ersatta med svenska (Avbryt/Ta bort).
+  - Tomma lägen: ikon, förklaring och tydlig nästa-knapp.
+  - Laddning: grå skelettkort medan data hämtas.
+  - Mörka rullningslist och mörkt färgschema i hela appen.
+  - Tillgänglighet: synliga fokusringar, aria-etiketter, minskad rörelse
+    respekteras.
+
+Identitet
+  Logotyp: "CS" i en ruta med accentram + "2 Hub". Appikon: mörk ruta med
+  gul "CS2".
+
+
+=====================================================================
+8. SIDA FÖR SIDA: VAD FINNS OCH HUR FUNGERAR DET
+=====================================================================
+
+--- Sökfältet (överst, alla sidor) -------------------------------
+  Skriv minst 2 tecken -> förslag med bild, namn, typ/rarity och pris
+  (max 7 föremål + 2 samlingar). Piltangenter flyttar, Enter öppnar,
+  Esc stänger, "Visa alla träffar i databasen" öppnar filtrerad lista.
+  Snabbtangent: / eller Ctrl+K.
+
+--- Sidomenyn (nederst) ------------------------------------------
+  Prisvisning (Lägsta marknadspris / Steam Market-pris), status
+  "Priser uppdaterade <datum>" och dagens USD->SEK-kurs.
+
+--- OVERVIEW -----------------------------------------------------
+  - Banner när en prisbevakning nått målpris.
+  - Fyra siffror: Inventory (riktiga pengar), Inventory (Steam-
+    krediter), Orealiserad vinst, Realiserad vinst ("–" tills något är
+    registrerat).
+  - Värdeutveckling + Största innehav (när du har inventory).
+  - "Kom igång"-checklista (4 steg) som försvinner när allt är klart.
+  - "Dina bevakningar" (upp till 5).
+  - Genvägskort: My Inventory, Database, Color Explorer, Market & Tools.
+
+--- MY INVENTORY -------------------------------------------------
+  Toppen: titel + knapparna Dela, Hämta Steam-inventory, + Lägg till
+  föremål. Därunder en rad med fyra siffror:
+    Totalt värde (växlare Riktiga pengar / Steam) | Vinst/förlust
+    (orealiserad + realiserad) | Investerat (och bästa investering) |
+    Föremål (antal, antal olika, "N utan pris", "N ej säljbara").
+  Flikar:
+   * Innehav (standard: Bildkort)
+       Verktygsrad: sök, sortering (Värde, Namn, Vinst, Förlust, Float),
+       växlare Bildkort/Tabell, knappen "Filter (n)".
+       Filterpanel (utfällbar): typ, vapentyp, rarity, färg, inköpspris
+       (alla/har/saknar), min/max kr, float från/till, favoriter, visa
+       dolda, "Rensa filter".
+       Bildkort: stor bild, wear/ST/antal i hörn, vinst/förlust i nedre
+       hörnet, namn, värde, "+ Inköpspris", ★ och ••• .
+       Tabell: Föremål | Float/seed (döljs om ingen har) | Snittinköp
+       (eller länken "+ Lägg till") | Värde (med "2 st · 1,40 kr/st") |
+       Vinst/förlust | ★ och ••• .
+       ••• -menyn: Sälj, Redigera, Dölj/Visa, Inspect & Float, Öppna i
+       databasen.
+       Markera flera (kryssrutor) -> åtgärdsfält: favoritmarkera, ta bort
+       favorit, dölj, visa, ta bort.
+   * Transaktioner
+       Alla köp och sälj som egna händelser (datum, typ, föremål med
+       float/seed, antal, à-pris, avgift, marknad, betalning, notering).
+       Knappar: + Köp, + Sälj, Exportera transaktioner (CSV), Importera
+       CSV, Exportera allt (backup), Importera backup.
+       CSV: semikolon-avgränsad, svenska decimalkommatecken, Excel-
+       vänlig. Ogiltiga rader hoppas över med besked.
+   * Vinst per föremål
+       Per position: köpt, sålt, kvar, snittinköp, realiserat,
+       orealiserat, totalt.
+   * Analys
+       Värdeutveckling (graf med hover), värde per kategori, vad står
+       för värdet (topp 10 + hur stor del de 5 största är), värde per
+       rarity, bästa/sämsta investeringar, lista över föremål som
+       saknar pris.
+  Lägg till föremål: sök skin -> slitage, variant (StatTrak/Souvenir),
+  float och seed (valfritt, kontrolleras mot skinets intervall), antal,
+  och (valfritt) registrera inköp direkt (pris, datum, marknad, avgift,
+  betalat med riktiga pengar/Steam-krediter, notering).
+  Registrera inköp snabbt: länken "+ Lägg till" -> liten ruta med bara
+  pris per st (+ datum, antal, avgift).
+  Viktigt: exemplar med OLIKA float/seed blandas inte ihop. Varje unikt
+  exemplar får sitt eget inköpspris och sin egen vinst. Saknar ett
+  float-exemplar egna köp används glidande snitt för skinet (märks "≈").
+
+--- COLLECTION TRACKER -------------------------------------------
+  Lista: kort per samling med tre skin-bilder, antal ägda, framstegsfält,
+  "Kvar att köpa" och "Samlingsvärde". Sortera: billigast att slutföra,
+  högst värde, mest klar, störst, namn. Filter: sök, slitagekrav (alla/
+  MW+/FT+/bara FN), dölj kompletta.
+  Detalj: Framsteg %, kvar att köpa, samlingsvärde, filter Alla/Äger/
+  Saknas, skins grupperade per rarity med billigaste marknad och slitage,
+  "Kopiera inköpslista". "Äger" avgörs av ditt inventory (valfritt
+  slitage).
+
+--- WATCHLIST ----------------------------------------------------
+  Sök föremål -> välj slitage/StatTrak, målpris och riktning (under eller
+  över). Flera bevakningar per föremål går bra. Tabell: pris nu, mål,
+  avstånd, förändring sedan start, status "Målpris nått".
+  Kontrolleras när sidan öppnas och var 15:e minut medan den är öppen.
+  Webbläsarnotiser kan aktiveras (en gång per träff). Inga aviseringar
+  när sidan är stängd (kräver server).
+
+--- DATABASE -----------------------------------------------------
+  Flikar: Vapenskins, Knivar, Handskar, Stickers, Charms, Agents, Cases,
+  Capsules, Music Kits, Patches, Graffiti, Samlingar.
+  Filter: sök, vapen, rarity, turnering (stickers), min/max kr,
+  StatTrak, Souvenir, prisstatus (alla/har/saknar), sortering (namn,
+  billigast, dyrast, rarity). 60 kort åt gången + "Visa fler".
+  Föremålssida (#/item/<id>):
+    - stor bild, rarity, färg, StatTrak/Souvenir-märken, beskrivning
+    - Prisöversikt: Billigast just nu (och var), Du får ut (netto),
+      Steam Market, StatTrak från, Souvenir från, datum för prisdata
+    - Float-intervall med skala över slitagegrader
+    - Faktarad: samling, team, paint index, mönsterlänk (Case Hardened/
+      Fade/Doppler -> Pattern Explorer)
+    - Knappar: + Lägg i inventory, ☆ Bevaka pris, ⇄ Jämför,
+      Float-simulator, Testa stickers
+    - Prisjämförelse per slitage mellan marknader. Kolumnen "Billigast"
+      visar lägsta pris, marknad och länk dit (Steam, Skinport, CSFloat,
+      CS.MONEY). Steam står sist och är nedtonad. Växlare Normal/StatTrak.
+    - Prisutveckling (Steam-trend 90 dagar) som graf
+    - Innehåll (för cases/capsules) och relaterade föremål
+  Samlingssida (#/collection/<id>): alla föremål i samlingen.
+
+--- COLOR EXPLORER -----------------------------------------------
+  - Välj FLERA primärfärger samtidigt + multicolor + en sekundärfärg.
+  - Täckning: reglage "minst X % av vapnet" i vald färg.
+  - Sök, vapentyp, slitage, min kr, budget max kr.
+  - Sortera: dyrast, billigast, bäst färgmatchning.
+  - Varje kort visar färgnamn och procent.
+  - Match My Skin: sök en kniv/handskar/skin (+ budget per föremål) ->
+    matchande knivar, handskar och vapenskins, sorterade efter
+    färgmatchning i procent (minst 45 %).
+
+--- LOADOUT BUILDER ----------------------------------------------
+  CS2:s riktiga platser, separat för CT och T:
+    Kniv, Handskar, Agent
+    Pistoler  CT: P2000, USP-S, P250, Five-SeveN, CZ75-Auto, Desert Eagle,
+              R8 Revolver, Dual Berettas
+              T: Glock-18, P250, Tec-9, CZ75-Auto, Desert Eagle, R8
+              Revolver, Dual Berettas
+    SMG       CT: MP9, MP7, MP5-SD, UMP-45, P90, PP-Bizon
+              T: MAC-10, MP7, MP5-SD, UMP-45, P90, PP-Bizon
+    Tunga     CT: Nova, XM1014, MAG-7, M249, Negev
+              T: Nova, XM1014, Sawed-Off, M249, Negev
+    Gevär     CT: M4A4, M4A1-S, FAMAS, AUG, SSG 08, AWP, SCAR-20
+              T: AK-47, Galil AR, SG 553, SSG 08, AWP, G3SG1
+    Utrustning: Zeus x27
+  (30 platser CT, 28 platser T.)
+  Varje plats är ett stort kort: klicka för att välja skin, välj slitage
+  och StatTrak, ✕ för att ta bort. Märken: Äger / Äger annat slitage /
+  Saknas. Pris med källa och "Pris saknas" när det behövs.
+  Skinväljaren: sök, Alla/Bara jag äger/Bara jag saknar, färg, maxpris,
+  sortering, "äger"-märke och färgprick.
+  Sidopanel: antal utrustade platser, totalt värde, vad du äger, att
+  köpa, färgmatchning (% av skins som matchar valt färgtema).
+  Verktyg: Spara, Ny, Spara som kopia, Ta bort, Dela (länk), Inköpslista
+  (kopierbar), Jämför med annan sparad loadout (t.ex. CT mot T), Töm,
+  Färgtema.
+  Budget Loadout Challenge: välj färg + budget (och om ägda skins räknas
+  som gratis) -> fyller loadouten så komplett som möjligt: först en andel
+  per plats efter vikt (kniv 26, handskar 18, AK-47/AWP 10, ...), sedan
+  fylls tomma platser med det billigaste som ryms, sist uppgraderas med
+  överblivna pengar. Visar resultat, t.ex. "28 av 28 platser för
+  1 996 kr".
+
+--- STICKER & CHARM WORKSHOP -------------------------------------
+  Välj vapenskin + slitage. Lägg upp till 4 stickers och en charm.
+  - Förhandsvisning på skinets standardbild (en förenklad bild, inte en
+    garanterad bild av hur det ser ut i spelet – det står på sidan).
+  - Dra stickers/charm i bilden; klicka på en sticker för att byta ut
+    den; fyra förinställda startplatser längs vapnet.
+  - Per sticker: slitage (0-100 %, bleknar och suddas), storlek, rotation.
+  - Zoom, "Vänd (andra sidan)" som speglar vapnet, "Återställ platser".
+  - Charm hänger i ett streckat band.
+  - Kostnad: skin, varje sticker, charm, totalt bygge, ett UPPSKATTAT
+    värdetillägg (tumregel: dyra stickers väger tyngre, slitage
+    minskar, tre eller fler identiska ger bonus) – inget exakt pris.
+  - Spara flera crafts (lokalt), ladda, ta bort, dela via länk.
+
+--- MARKET & PRICES ----------------------------------------------
+  Prisrörelser (7 och 30 dagar, Steam-trend) för likvida föremål: lägsta
+  pris minst ca 80 kr, finns hos minst 3 marknader, Steam-priset nära
+  marknaden, inga Souvenir, inga hopp över 60 %/vecka. Två listor:
+  Stiger mest / Faller mest. Priset som visas är lägsta marknadspris.
+
+--- INVESTERINGSRADAR --------------------------------------------
+  Analyze -> Investeringsradar (#/invest). Visar vilka skins som hållit
+  värdet eller stigit och vilka som tappat. Detaljer i avsnitt 18d.
+
+--- INSPECT & FLOAT ----------------------------------------------
+  Klistra in en inspect-länk (eller bara hex-koden) -> avkodas lokalt:
+  skin, float (8 decimaler), paint seed, paint index, StatTrak-räknare,
+  namntag, item-id, stickers (plats, slitage, pris), charms och
+  Doppler-fas. Panelen visar tydligt "Avkodat ur inspect-länken" eller
+  "Simulering".
+  Justera float (reglage/exakt) och seed -> slitage, plats i bandet,
+  pris för det slitaget och prisjämförelse uppdateras. Ändrar du ett
+  avkodat värde står det "Du har ändrat – det här är en simulering" med
+  knapp för att återställa originalet. Bilden mörknas som en visuell
+  simulering. "Lägg i inventory med float & seed".
+  Begränsning: äldre S/A/D-länkar (utan lång hex) kan inte avkodas.
+
+--- TRADE-UP CALCULATOR ------------------------------------------
+  10 skins av samma rarity (eller 5 Covert -> kniv/handske, uppskattning).
+  Per rad: float, antal, pris (egen överskrivning möjlig), summa.
+  StatTrak-växlare. "Kontroll mot CS2:s regler": exakt 10 (5 för Covert),
+  samma rarity, StatTrak enhetligt, alla tillhör en samling (för Covert: en
+  samling med vapenfall).
+  Resultat: utfall med bild, samling, chans, beräknad float och värde;
+  förväntat värde (marknadspris) och netto efter avgift; förväntad vinst;
+  break-even-kostnad (totalt och per skin); chans till vinst. Utfall
+  utan pris markeras.
+
+--- PATTERN EXPLORER ---------------------------------------------
+  Case Hardened: vapen, variant (Heat Treated finns på Five-SeveN), sida
+  (ovan/magasin eller playside/backside); alla 1 001 seeds rankade efter
+  blå procent med blå/lila/guld-stapel. Fade: Fade-procent 80-100 %.
+  Doppler: tabell över faser och paint index.
+  Sök seed, jämför upp till 4 seeds. Panelen "Så beräknas det" förklarar
+  att värdena är en etablerad extern beräkning (inte egen uppskattning).
+  Inga bilder per seed (ingen fri bilddatabas).
+
+--- SKIN COMPARISON ----------------------------------------------
+  Upp till 4 föremål sida vid sida. Rader: billigast (marknad), egenskaper
+  (rarity, typ, färg, samling, float), pris per slitage, StatTrak, netto,
+  7-dagarstrend. Chips överst döljer grupper. Bästa värdet i varje rad
+  är fetmarkerat.
+
+--- FLOAT RANKING ------------------------------------------------
+  Float Checker: välj skin + float -> slitage, sannolikhet att en
+  droppad float är lägre/högre ("1 på 12"), slitagefördelning vid drop.
+  Mina bästa floats: dina föremål med float rankade efter hur ovanlig
+  floaten är. Obs: sannolikhetsranking, inte global ranking (jämn
+  fördelning över skinets intervall antas).
+
+--- TOOLS --------------------------------------------------------
+  Sell Calculator: ange säljpris och/eller önskat netto -> nettobelopp
+  och listpris per marknad, med redigerbara avgifter, Steam-krediternas
+  omräkning och "Återställ standardavgifter".
+
+--- DELNING ------------------------------------------------------
+  Dela samling (knapp i inventory): välj visningsnamn, endast favoriter
+  eller allt, med/utan värden, med/utan float -> länk där hela listan
+  ligger i adressen (komprimerad). Ingen server. Mottagaren ser en
+  skrivskyddad kopia med dagens priser.
+  Loadouts och crafts delas på samma sätt via länk.
+
+
+=====================================================================
+9. SÅ SPARAS DIN DATA (INDEXEDDB) OCH BACKUP
+=====================================================================
+Allt sparas i webbläsaren (IndexedDB, databas "cs2hub"):
+  items      dina föremål (id, market_hash_name, antal, float, seed,
+             favorit, dold, anteckning, namntag, källa, "ej säljbar")
+  trades     köp/sälj (typ, föremål, antal, pris/st, avgift, datum,
+             marknad, betalning riktiga/steam, float, seed, notering)
+  snapshots  värdehistorik (en mätpunkt ~var 6:e timme du öppnar sidan)
+  watch      prisbevakningar (mål, riktning, startpris, "notifierad")
+  loadouts   sparade loadouts
+  kv         inställningar: prisläge, avgifter, Steam-kredit-kvot,
+             Steam-ID, proxy-URL, valutakurs-cache, sparade crafts,
+             jämförelselista
+Data är PER webbläsare och enhet – mobil och dator delar den inte.
+Flytta data: Inventory -> Transaktioner -> "Exportera allt (backup)"
+(JSON) och "Importera backup" på andra enheten, eller använd Dela.
+Rensas webbläsarens webbplatsdata försvinner allt – ta backup ibland!
+Om IndexedDB inte går att använda (t.ex. privat läge) faller appen
+tillbaka på minnet så sidan fungerar, men data sparas då inte.
+
+
+=====================================================================
+10. FORMLER OCH BERÄKNINGAR
+=====================================================================
+Vinstmotor (finance.js)
+  - Varje transaktion är en händelse, sorterad på datum.
+  - KÖP: antal och kostnad (pris x antal + avgift) läggs till positionen.
+  - SÄLJ: snittkostnad = kostnad / antal; realiserad vinst = intäkt
+    (pris x antal - avgift) - snittkostnad x sålda (som fanns i
+    positionen). Såldes mer än registrerat saknar överskottet kostnad.
+  - Position = skinets marknadsnamn + (om finns) float och seed.
+  - Orealiserad vinst = nuvarande värde x antal kvar - snittkostnad x
+    antal kvar.
+  - Realiserad vinst delas upp på riktiga pengar och Steam-krediter
+    efter hur du fick betalt.
+  - Värde "riktiga pengar" = nettot efter avgift; "Steam" = Steam-pris.
+
+Float
+  Wear: FN 0-0,07, MW 0,07-0,15, FT 0,15-0,38, WW 0,38-0,45, BS 0,45-1.
+  Sannolikhet att float <= x vid drop = (x - min) / (max - min).
+
+Trade-up
+  Normaliserad input = (float - min) / (max - min) per skin. Snitt av 10.
+  Utfallets float = utfallets min + snitt x (max - min). Chans per utfall
+  = (antal input från samlingen / 10) / (antal möjliga utfall i
+  samlingen). Förväntat värde = summa(chans x pris).
+
+Färgmatchning (Match My Skin)
+  Poäng 0-100: samma primärfärg +50 (korsad +25), samma sekundär +15,
+  båda multicolor +5, plus upp till 30 efter hur lika dominerande färgen
+  är (RGB-avstånd). Visas om >= 45 %.
+
+Loadout-budget: se avsnitt 8 (Loadout Builder).
+
+Sticker-värdetillägg: pris x faktor (2 % under 20 kr, 8 % under 200 kr,
+  15 % under 2 000 kr, annars 25 %) x (1 - slitage), x1,5 för tre eller
+  fler identiska; tak = 3 x skinets pris.
+
+Inspect-avkodning
+  Masked-länkens hex: första byten är XOR-nyckel för alla byte, första
+  byten efter avkodning och 4 sista (checksumma) tas bort, resten är en
+  protobuf (CEconItemPreviewDataBlock): fält för konto, item-id,
+  defindex, paint index, rarity, quality, paintwear (float32), seed,
+  StatTrak, namntag, stickers (fält 12) och charms (fält 20).
+
+
+=====================================================================
+11. SÄKERHET OCH INTEGRITET
+=====================================================================
+  - Inga konton, inga lösenord, inga cookies från oss.
+  - Din data lämnar aldrig din webbläsare, förutom:
+      * Steam-importen skickar ditt (publika) SteamID till din egen
+        Cloudflare-proxy. Inga tredjeparts-proxyer används (de togs bort av
+        integritetsskäl).
+      * Valutakursen hämtas från open.er-api.com.
+      * Bilder hämtas från Steams CDN.
+  - All text som visas escapas. Data från delningslänkar, backupfiler och
+    Steam-JSON "tvättas" (tal tvingas till tal, text begränsas) så att en
+    manipulerad länk inte kan köra kod. Testat med skadliga länkar.
+  - Proxyn validerar indata (17-siffrigt SteamID, namn) och svarar bara på
+    GET. Den är LÅST som standard: /inventory och /resolve svarar bara om
+    anropet kommer från din egen sida (eller localhost vid test), annars
+    403. Fler sidor tillåts med variabeln ALLOWED_ORIGIN (kommaseparerad
+    lista). Rotadressen "/" är öppen och visar bara en hälsokoll.
+
+
+  Skydd tillagda i senaste versionen
+  - Content-Security-Policy och andra säkerhetsheadrar (i site/_headers):
+    bara egna skript får köras, inga inbyggda händelsehanterare, anslutningar
+    bara till egen sida, raw.githubusercontent.com, open.er-api.com och
+    *.workers.dev, bilder bara från Steams CDN och GitHub. Sidan kan inte
+    läggas i en iframe (clickjacking). Använder du en egen domän för proxyn:
+    lägg till den i connect-src i _headers.
+  - Prisfiler från nätet och cache kontrolleras (rätt form, rimliga tal, rimligt
+    datum) innan de används; trasig eller manipulerad data ignoreras.
+  - Lagrade inställningar typkontrolleras vid läsning (trasig lagring kan inte
+    krascha sidan eller skapa "NaN"). Ogiltiga datum visas som "–".
+  - Backupimport avbryts INNAN något rensas om filen saknar data. Importerade
+    bevakningar tvättas som övriga data.
+  - Trasiga adresser (t.ex. felaktig %-kodning) kraschar inte routern.
+  - Spara-knappar skyddar mot dubbelklick (inga dubbletter).
+  - Inga tredjeparts-proxyer: Steam-ID skickas bara till Steam och din proxy.
+  - Proxyn: /inventory, /resolve och /img kräver tillåten Origin; /img släpper
+    bara igenom bilder från Steams servrar. OBS: Origin-kontrollen stoppar
+    andra webbsidor men kan förfalskas av program utanför webbläsare; skyddet
+    mot missbruk är Cloudflares gratiskvot och cachning.
+
+
+=====================================================================
+12. PRESTANDA OCH GRATISGRÄNSER
+=====================================================================
+  - Laddtid: ca 0,4 s lokalt. Data ca 12 MB okomprimerad men ca 2-3 MB
+    över nätet (Cloudflare komprimerar). Alla vyer renderas på ca 30 ms.
+  - 17 000+ föremålssidor renderar på några sekunder tillsammans; ett
+    inventory med 3 000 föremål och 2 000 transaktioner renderar på ca 50
+    ms.
+  - Bilder laddas "lazy"; listor visar 60 (databas) eller 120/300
+    (inventory) åt gången.
+  - Cloudflare: statiska filer är gratis och obegränsade. Proxyn (Worker)
+    har 100 000 anrop/dag; en import är 1-6 anrop och cachas 60 s.
+  - GitHub Actions: prisjobbet tar ca 21 s; var 6:e timme ger ca 40
+    minuter/månad (gratis i offentliga repon).
+  - Repot växer INTE av prisuppdateringarna: prices.json skrivs som en enda
+    commit på grenen "prices" som skrivs över varje gång (force-push).
+
+
+=====================================================================
+13. PUBLICERING OCH UPPDATERING (GITHUB + CLOUDFLARE)
+=====================================================================
+  Kodändringar:  öppna filen på GitHub -> pennan -> klistra in nytt
+                 innehåll -> Commit changes. (Eller Add file -> Upload
+                 files för flera filer.) Cloudflare bygger och publicerar
+                 själv inom någon minut. Öppna sidor visar då en banner
+                 "Det finns en ny version… [Uppdatera nu]" – du behöver
+                 inte trycka Ctrl+F5. (Kräver build-kommandot nedan.)
+  Priser:        uppdateras automatiskt var 6:e timme (grenen "prices").
+                 Manuellt: GitHub -> Actions -> "Uppdatera priser" -> Run
+                 workflow.
+  GitHub stänger av schemalagda jobb i offentliga repon efter 60 dagars
+  inaktivitet. Jobbet gör därför en liten commit (.github/keepalive.txt)
+  första dagen i varje månad, vilket räknas som aktivitet. Slutar priserna
+  ändå uppdateras: Actions-fliken -> Enable / Run workflow.
+  Version/uppdateringsbanner: i Cloudflare -> projektet -> Settings ->
+  Builds, sätt Build command till
+      date -u +%Y%m%d%H%M%S > site/version.txt
+  Då får varje bygge ett nytt versionsnummer som sidan jämför mot. Stäng
+  också av byggen för icke-produktionsgrenar ("Non-production branch
+  builds") så att grenen "prices" inte startar onödiga bygg.
+  Cache: _headers sätter no-cache på index.html, js, css och sw.js (alltid
+  kontroll mot servern), data/* cachas 15 minuter. Service workern hämtar
+  appfiler nätverk-först, så nya versioner slår igenom direkt.
+  Undvik att redigera kod manuellt i GitHub:s webbgränssnitt när det går;
+  ladda hellre upp hela filer, och kontrollera Cloudflare -> Deployments
+  efteråt (Ready = ok).
+  Backup-påminnelse: har du data men ingen backup på 30 dagar visas en
+  banner "Ta backup nu" / "Påminn senare" (snooze 14 dagar). Datan finns
+  bara i den här webbläsaren.
+  Ändra frekvens: redigera cron-raden i .github/workflows/prices.yml
+  ("17 */6 * * *" = 17 min över varje 6:e timme).
+  Cloudflare-bygget använder wrangler.jsonc (mappen "site" som assets),
+  Build command tomt, Deploy command "npx wrangler deploy".
+  Byta sidans adress: Cloudflare -> projektet -> Settings.
+  Steam-proxyn är en SEPARAT worker ("steam-proxy") som inte byggs från
+  GitHub; ändras worker/steam-proxy.js måste koden klistras in i
+  Cloudflares kodredigerare och sparas ("Deploy").
+
+
+=====================================================================
+14. STEAM-IMPORTEN OCH PROXYN
+=====================================================================
+  Inventory måste vara PUBLIKT (Steam -> Profil -> Redigera profil ->
+  Sekretess -> Inventory: Offentligt).
+  Flöde: SteamID64 eller profil-URL/namn -> (vid namn: slås upp via
+  proxyn) -> proxyn hämtar steamcommunity.com/inventory/<id>/730/2 -> JSON
+  -> appen grupperar per marknadsnamn och visar en FÖRHANDSVISNING (nya,
+  ändrade, försvunna) som du bekräftar. Egna uppgifter (float, seed,
+  anteckning, namntag, favorit, dold) och transaktioner ändras inte, och
+  manuella föremål rörs inte. Se avsnitt 18e för detaljer.
+  Proxy-URL anges i importrutan (sparas) eller i site/js/config.js.
+  Om Steam svarar 429 ("begränsar anropen") – vänta eller använd den
+  manuella vägen: öppna
+    https://steamcommunity.com/inventory/DITT_ID/730/2?l=english&count=2000
+  i en flik, kopiera allt och klistra in under "Fungerar inte?".
+  Steam ger inte float/seed – lägg till dem via Redigera.
+  Medaljer, märken m.m. markeras "ej säljbar" (Steams "marketable"-flagga).
+
+
+=====================================================================
+15. KÖRA LOKALT
+=====================================================================
+  Dubbelklicka "Starta CS2 Hub.bat" (kräver Python) eller kör:
+      python tools/serve.py
+  och öppna http://localhost:5173. Öppna INTE index.html direkt (fil-
+  adress) – då laddas ingen data. Stäng det svarta fönstret för att
+  stoppa.
+
+
+=====================================================================
+16. TESTNING
+=====================================================================
+  Allt har testats i webbläsare, lokalt och på den publicerade sidan:
+  - alla vyer med båda prisvalen och med/utan data
+  - alla ~17 500 föremåls- och samlingssidor (ingen "NaN/undefined/null")
+  - vinstberäkningar mot handräkning, unika exemplar, CSV-roundtrip
+  - Inspect-avkodning inkl. stickers/charms, olika nycklar, felfall
+  - trade-up, loadout (budget, delning), workshop, mönster
+  - säkerhet: skadliga delningslänkar/backup/Workshop-länkar
+  - mobil/surfplatta (375, 320, 768 px) utan sidledes scroll
+  - alla knappar och länkar (över 200 klick) utan döda knappar/fel
+  - Steam-proxyn mot simulerade svar och end-to-end i appen
+  - Stresstest: 5 000 föremål + 5 000 transaktioner + 1 500 värdepunkter:
+    inventory-flikarna renderas på 30-85 ms; Dagens fynd med full historik
+    (5 000 föremål x 120 dagar) på ca 190 ms. Första målning ca 0,1 s lokalt.
+  - Skräpdata: 15 slags konstiga värden i alla inmatningsfält på alla 22 sidor
+    (inkl. skript och HTML), skadliga delningslänkar, korrupt lagring,
+    trasiga backupfiler, felaktiga adresser, snabba sidbyten, dubbelklick.
+  - Klickrunda: över 350 klick på alla knappar utan fel.
+  - CSP verifierad mot alla sidor (inga blockerade resurser efter justering).
+  Ej testat i miljön: service worker (kan inte registreras i testbläsaren),
+  riktig prisjobbskörning på GitHub, riktiga bilder via proxyn.
+
+
+=====================================================================
+17. KÄNDA BEGRÄNSNINGAR
+=====================================================================
+  - Priser är en snapshot (var 6:e timme), inte live; och är lägsta
+    UTROPSPRIS, inte genomförda försäljningar.
+  - Prisfeeden skiljer inte på Doppler-faser; Skinports pris på dyra
+    Doppler-knivar kan vara missvisande (skydd finns).
+  - Workshop ritar stickers ovanpå en 2D-bild; ingen 3D-modell.
+  - Pattern Explorer har inga bilder per seed.
+  - Float Ranking är en sannolikhetsranking, inte global.
+  - Inspect: äldre S/A/D-länkar kan inte avkodas.
+  - Steam ger ingen float/seed vid import.
+  - Prisaviseringar kan inte skickas när sidan är stängd.
+  - Data är per webbläsare; ingen synk mellan enheter (använd backup).
+  - Färgerna är beräknade från bilder (uppskattning).
+  - Steam-importen från Cloudflare kan ibland få 429 från Steam.
+
+
+=====================================================================
+18. FELSÖKNING
+=====================================================================
+  Sidan ser gammal ut efter uppdatering:  tryck "Uppdatera nu" i
+      bannern, eller Ctrl+F5 som nödlösning. Kolla Cloudflare ->
+      Deployments att senaste bygget är "Ready".
+  Priserna är gamla:  GitHub -> Actions -> kör "Uppdatera priser". Se
+      avsnitt 13 om jobbet slutat köra.
+  "Pris saknas":  föremålet finns inte i någon prisfeed (ofta mycket
+      nya eller ovanliga föremål). Det är inte gratis. Du kan ange eget
+      pris i Trade-up och registrera inköp i inventory.
+  Steam-import misslyckas:  kontrollera att inventory är publikt; prova
+      igen om en minut (429); annars den manuella JSON-vägen.
+  Tom sida/laddar aldrig:  tryck "Försök igen"; kontrollera
+      internetanslutningen.
+  Inget sparas:  webbläsaren kan blockera lagring (privat läge).
+  Mobilen visar inte min data:  datan finns bara på den enhet där du
+      la in den – använd backup/import.
+  Edge visar gamla filer lokalt:  använd tools/serve.py (utan cache).
+
+
+=====================================================================
+18b. NYHETER I SENASTE VERSIONEN
+=====================================================================
+  Enklare prisinmatning
+    - Pris skrivs som man vill: "12,50", "12.5", "3 595,74", "3,595.74"
+      eller "1 234 kr" tolkas rätt (tusentalsavskiljare och decimaltecken
+      känns igen). Enter sparar.
+    - Knappen "Använd marknadspris" fyller i dagens lägsta pris.
+    - Växla mellan "Per st" och "Totalt" när du köpt flera.
+    - Raden under priset visar per-styck, totalsumma och hur mycket över/
+      under marknadspriset du betalade.
+    - Avgift och betalsätt ligger i en hopfälld ruta (bara när det behövs).
+    - Saknar föremål inköpspris visas en ruta överst i Innehav: "Fyll i ett
+      i taget" (kö med Spara & nästa / Hoppa över) eller "Använd dagens pris
+      för alla" (startpris; vinsten räknas från idag).
+  Prishistorik (riktig)
+    - Prisjobbet sparar dagens lägsta pris för de ca 5 000 mest handlade
+      föremålen i history.json på grenen "prices" (max 120 dagar, ca 2,5 MB,
+      hämtas bara när du öppnar ett föremål). Kurvan på föremålssidan har ett
+      värde per dag och blir bättre ju längre jobbet har körts.
+    - Steam-grafen visar medelpris per period (30-90 d, 7-30 d, 1-7 d, 24 h)
+      uträknat ur Steams fyra snitt. Det är inte en dagskurva.
+  Inventory
+    - "Värde och inköp över tid": värdelinje + registrerad kostnad + markeringar
+      för köp/sälj, och uppdelning i "mer investerat" och "marknadsrörelse".
+    - Ny flik "Var sälja": nettot på Skinport och CSFloat per föremål, bästa
+      marknad och vad du tjänar på att välja rätt.
+  Inställningar (ny sida, längst ner i menyn)
+    - Prisläge, Steam-kredit-omräkning, avgifter per marknad, backup (ladda
+      ner/återställ), rensa all data (dubbel bekräftelse), proxy-adress,
+      rensa cache och version.
+  Watchlist
+    - Banner när bevakade föremål nått målpriset sedan sist du var här
+      (även utan webbläsarnotiser).
+  Combo Finder (ny sida under Explore)
+    - Välj skin eller färg + budget; få kompletta set (kniv, handskar,
+      gevär, AWP, pistol) i matchande färger, med totalpris.
+  Sök
+    - Förstår "blå kniv under 3000 kr", "röda handskar", "ak-47 över 500",
+      "100-500 kr". "Visa alla" skickar färgfrågor till Color Explorer.
+  Tillgänglighet och prestanda
+    - Hoppa-till-innehåll, fokus flyttas vid sidbyte, sidtitel per sida,
+      dialoger med fokusfälla och återställd fokus, uppläsning av meddelanden.
+    - Långa kortlistor renderas bara när de syns (content-visibility).
+  Color Explorer
+    - Exakt färgväljare ("Hitta närmast" med likhetsprocent), filter på
+      typ (vapen/kniv/handskar), "bara med pris" och färgstapel på korten.
+
+=====================================================================
+18c. DAGENS FYND OCH DELBART BILDKORT
+=====================================================================
+  Dagens fynd (Analyze -> Dagens fynd)
+    Tre listor, alla med filter för lägsta pris och typ:
+    1. Billigare än vanligt: dagens lägsta pris mot MEDIANEN i vår egen
+       prishistorik (kräver minst 4 dagar; 8-50 % lägre visas).
+    2. Billigt på en marknad: lägsta pris mot medianen av de andra
+       marknaderna (minst 3 marknader; 10-30 % lägre). Över 30 % räknas som
+       trolig felaktig/föråldrad listning och döljs.
+    3. I ditt inventory: föremål som nu kostar minst 10 % mindre än ditt
+       registrerade snittpris (köper du fler sänks snittet).
+    Bara vapen, knivar, handskar och cases. Föremål där priset beror på fas
+    eller mönster (Doppler, Fade, Case Hardened, Marble Fade) och Souvenir
+    jämförs inte. Alla priser är utropspriser – kontrollera listningen.
+  Dela som bild (knapp i My Inventory och i Loadout Builder)
+    Skapar en PNG (1200 px bred) med titel, föremål (bild, namn, slitage,
+    marknadsvärde per föremål) och totalvärde. Du väljer titel, antal
+    föremål (4-20) och om värden ska visas. Ladda ner eller kopiera och
+    klistra in i Discord. Inköpspriser, vinst och transaktioner finns
+    ALDRIG på kortet.
+    Steams bild-CDN saknar CORS, så bilderna hämtas via Steam-proxyn
+    (/img?u=...). Proxyn släpper bara igenom bilder från Steams egna
+    servrar och bara anrop från din egen sida. Är proxyn inte uppdaterad
+    ritas kortet utan bilder (raritetsfärger och text) och en notis visas.
+
+=====================================================================
+18d. INVESTERINGSRADAR
+=====================================================================
+  Analyze -> Investeringsradar. Filter: lägsta pris (standard 100 kr) och
+  typ (vapen, knivar, handskar, lådor). Tre listor:
+    1. Har hållit värdet eller stigit (taggarna "Stigande" och "Stabil"),
+       max 25, sorterat efter poäng.
+    2. Överhettade - vänta med att köpa (max 15, störst 7-dagarshopp först).
+    3. Fallande - undvik eller sälj (max 25, sämst poäng först).
+  Kolumner: pris (lägsta marknadspris), förändring mot 7, 30 och 90 dagar,
+  Svängning och Måste stiga.
+
+  Datakälla: Steams snittpriser 24 tim / 7 d / 30 d / 90 d (prices.json,
+  fältet "tr"). Nuläge = 24 h-snittet (annars 7 d). Ingen egen historik
+  används än.
+  Urval: vapen, knivar, handskar och cases; lägsta externa pris minst
+  ca 3 USD; finns hos minst 3 marknader; Steam-priset mellan 0,8 och 3 x
+  marknadspriset; 90 d-förändring under 300 %. Doppler, Fade, Case
+  Hardened, Marble Fade och Souvenir tas inte med (pris beror på
+  fas/mönster).
+
+  Beräkningar (site/js/views/invest.js)
+    ch7/ch30/ch90 = nu / snittet för perioden - 1.
+    Svängning = (högsta - lägsta av nu, 7 d, 30 d, 90 d) / medelvärdet.
+    Måste stiga = lägsta pris / nettot man får ut (Skinport/CSFloat efter
+      avgift) - 1, minst 0. Alltså hur mycket priset måste öka för att man
+      ska gå plus efter säljavgiften.
+    Poäng = 0,45 x ch90 (begränsad -40..60) + 0,35 x ch30 (-30..40)
+      + 0,1 x ch7 (-15..15) - 0,15 x max(0, svängning - 12).
+    Taggar (i den här ordningen):
+      Överhettad: ch7 över 20 % eller nu över 1,25 x 30 d-snittet
+                  (poängen minskas med 15).
+      Fallande:   ch90 högst -10 % eller ch30 högst -8 %.
+      Stigande:   ch90 minst +10 % och ch30 minst +3 %.
+      Stabil:     ch90 och ch30 minst -5 % och svängning under 12 %.
+      Blandat:    allt annat (visas inte i någon lista).
+
+  Obs: bara historik, ingen garanti för framtiden, och inte ekonomisk
+  rådgivning (står även på sidan). Steams snitt är brusigt för föremål
+  med få försäljningar, så enstaka extrema värden kan förekomma.
+
+=====================================================================
+18e. UPPGRADERING 2026-11-25: PRISSTATUS, BACKUP v2, PRICE CALCULATOR
+=====================================================================
+  Menyn: gruppen "Market" (Market & Prices, Dagens fynd, Investeringsradar,
+  Price Calculator) skiljs nu från "Analyze" (Inspect & Float, Trade-up,
+  Pattern Explorer, Skin Comparison, Float Ranking, Tools).
+
+  Prisstatus (site/js/pricing.js, analysePrice)
+    Fem nivåer, alla beräknade ur verklig data:
+      Hög tillförlitlighet  3+ marknader, lägsta priset är inte avvikande
+      Begränsad prisdata    1-2 marknader, eller bara Steam/BUFF163
+      Osäkert pris          lägsta priset ligger minst 40 % under medianen av
+                            övriga marknader (och minst 0,5 USD), pris beror på
+                            fas/mönster (Doppler, Fade, Case Hardened, Marble
+                            Fade), eller Steam ligger klart under marknaden
+      Gammal prisdata       snapshoten är äldre än 36 timmar
+      Pris saknas           ingen marknad har föremålet
+    En marknad som ligger HÖGT påverkar inte nivån (det lägsta priset är det
+    som visas) men nämns som orsak. Föremål under ca 0,5 USD flaggas inte för
+    avvikelser eftersom små priser naturligt varierar.
+    Mätt mot prisfilen 2026-11-25: ca 66 % hög, 26 % begränsad, 7 % osäker,
+    1 % saknas.
+    Visas: på varje föremålssida (nivå, antal marknader, orsaker), i My
+    Inventory (varningsruta + panelen "Osäkra priser" under Analys, med orsak
+    per föremål), och i Investeringsradar.
+    OBS: prisleverantören anger EN tidpunkt för hela snapshoten, inte per
+    marknad. Sidan säger det i stället för att låtsas ha tid per marknad.
+
+  Backup v2 (backup-core.js, store.js, views/backup-ui.js)
+    - Filnamn med datum, format 2, antal poster och kontrollsumma (SHA-256;
+      reserv FNV-1a om webbläsaren saknar crypto.subtle).
+    - Äldre backuper (format 1) läses och migreras automatiskt.
+    - Allt i filen granskas och tvättas INNAN databasen rörs. Avvisas:
+      fel app, nyare format, fel typer, ändrad fil (kontrollsumma stämmer
+      inte). Ogiltiga poster och dubbletter hoppas över med varning.
+    - Förhandsvisning: per typ hur många som finns i filen, är nya,
+      skrivs över/behålls, är oförändrade och tas bort.
+    - Två lägen: "Slå ihop" (lägger bara till det som saknas, ändrar inget
+      befintligt, behåller dina inställningar) och "Ersätt allt".
+    - Skrivningen sker i EN IndexedDB-transaktion: misslyckas något ändras
+      ingenting. Före en ersättning sparas en säkerhetskopia, och
+      Inställningar -> "Ångra senaste återställning" går tillbaka.
+    - Säkerhet: inställningar i filen släpps bara igenom för kända nycklar
+      med typkontroll. Proxy-adressen (styr vart ditt Steam-ID skickas) läses
+      ALDRIG från en backup, och cache-nycklar ingår inte. Tidigare kunde en
+      manipulerad backup byta proxy-adress – det är åtgärdat.
+    - IndexedDB-versionen höjdes till 2 (nytt lager "safety"). Äldre
+      databaser uppgraderas automatiskt utan dataförlust.
+
+  Price Calculator (Market -> Price Calculator, #/calc)
+    Valfritt föremål (fyller i marknadspris) eller egna priser. Antal, köppris,
+    avgift vid köp, säljpris, fast avgift. Två marknader jämförs sida vid sida:
+    brutto, avgift, netto, vinst, avkastning och break-even-säljpris. Tabell
+    med flera säljpriser och "listpris som krävs för önskat netto". Avgifterna
+    kommer från Inställningar. Formler (pricing.js tradeMath):
+      kostnad = köppris x antal x (1 + köpavgift %)
+      netto   = säljpris x antal x (1 - säljavgift %) - fast avgift
+      vinst   = netto - kostnad
+      break-even per st = (kostnad + fast avgift) / (antal x (1 - säljavgift %))
+
+  Investeringsradar (uppdaterad)
+    - Visar poängens delar vid hover och en utfällbar förklaring av formeln.
+    - Kolumnen "Egen": förändring i vår egen dagliga prishistorik, visas per
+      föremål först när historiken är minst 7 dagar lång (annars "–").
+    - Osäkra/gamla priser döljs som standard (kan slås av), och föremål med
+      färre än 4 marknader märks.
+
+  Säkerhetsgranskning (2026-11-26)
+    Åtgärdat
+      - Delningslänkar och Loadout-länkar (views/share.js): uppackningen har
+        tak (4 MB utdata, 400 000 tecken in). En liten manipulerad länk kan
+        alltså inte expandera till gigabyte ("zip-bomb") och frysa fliken.
+      - Prisfil och historikfil (data.js): ALLA rader och trendposter
+        valideras, inte bara ett stickprov. En enda trasig rad gör att hela
+        filen avvisas och senast godkända cache används.
+      - _headers: Strict-Transport-Security och Cross-Origin-Opener-Policy.
+      - .assetsignore: tests.html och js/tests.js publiceras inte. (Ej
+        verifierat att just din Cloudflare-konfiguration läser filen.)
+    Kontrollerat utan fynd
+      - All extern/importerad data tvättas före visning (backup, Steam-JSON,
+        delningslänkar, prisfiler) och all HTML-utdata går via esc().
+    Kvarvarande risker (medvetna)
+      - CSP tillåter connect-src https://*.workers.dev (för din egen
+        Steam-proxy) och style-src 'unsafe-inline'. Snäva in workers.dev till
+        din exakta adress när den är känd.
+    Tester: 20 nya (prisfil, historik, zip-bomb, rundtur, skräplänkar).
+    Delningslänk öppnad och verifierad i appen; Loadout-länk ej klickad separat
+    (använder samma decodeShare).
+
+  Lazy-load av klistermärken (2026-11-26)
+    stickers.json (5 MB, 11 907 st) blockerar inte längre första sidan.
+      - data.js: startStickers() hämtar filen parallellt vid start; ensureStickers()
+        slår ihop den med katalogen (D.catalog, D.byId, D.mhn; samma ordning som
+        förut) första gången den behövs. Misslyckas hämtningen fortsätter appen
+        utan stickers (notis visas), i stället för att hela appen stoppas.
+      - Routern väntar på stickers för alla vyer utom Overview, Settings,
+        Trade-up, Patterns och Float Ranking. Overview/loadState väntar bara om
+        dina föremål eller affärer innehåller stickers. Global sökning söker om
+        när stickers har laddats och visar Laddar klistermärken till dess.
+      - Verifierat med en artificiellt fördröjd fil (4 s): Overview ritades efter
+        0,3 s, Database/sticker visade skelett och sedan alla 11 907, sticker-
+        innehåll värderades rätt, felfallet (filen otillgänglig) kraschade ingen vy.
+      - Vinsten är störst över mobilnät; lokalt är skillnaden liten. Mät själv med
+        nätverksfliken efter publicering. Ej mätt på riktig Cloudflare.
+
+  Klick-test av alla knappar (2026-11-26)
+    En tillfällig testrobot (raderad efteråt) tryckte på varje unik knapp, länk,
+    flik, väljare, kryssruta och fält på alla 26 vyer, även inne i dialogrutor
+    (3 nivåer), med skräpvärden i fälten. Körd på tre isolerade portar:
+    stor datamängd (4 000 föremål/12 000 affärer), helt tom databas och mobil
+    bredd (375 px). Ca 2 500 klick. Resultat: inga JS-fel, inget överflöd.
+    Hittade och åtgärdade tre fel:
+      - Database: filtret (debounce) kunde kasta fel om man bytte sida direkt.
+      - Float Ranking: ritade alla floats (30 000 DOM-noder, 1 s per filter);
+        nu 100 åt gången med Visa fler.
+      - Sökning: inklistrade Steam-namn som AK-47 | Redline (Field-Tested) och
+        StatTrak-namn gav 0 träffar; nu rensas slitage/tecken (searchTerms).
+    Flöden verifierade för hand: Inspect (riktig syntetisk länk -> inventory),
+    backup-import (giltig, manipulerad, trasig, tom, XSS-text), Steam-import
+    (felaktigt ID, proxy nere, inklistrad JSON), köp/redigera/ångra/ta bort.
+    Ej automatiskt testat: att klicka sig igenom på riktiga Steam-konton, filhämtning
+    och kopiering (blockerades i testet), samt riktig mobil enhet.
+
+  Stora tester (2026-11-26)
+    Körda manuellt i webbläsaren på en separat port (5174, egen lagring) med
+    4 000 föremål och 12 000 affärer, så din riktiga data aldrig rörs:
+      - Alla inventory-flikar, Portfolio, Samlingar, Investeringsradar och
+        Dagens fynd renderar på under 200 ms, utan fel eller överflöd.
+      - Backup-rundtur på 16 000 poster: identisk kontrollsumma, 211 ms.
+        Manipulerad fil och 11 slags skräpfiler avvisas.
+      - Klickflöde: köp (tomt/negativt pris blockeras, 1 234,50 tolkas rätt),
+        redigera, ångra (återställer exakt), ta bort + ångra.
+    Permanenta tester (11 nya): skalning (5 000 snapshots, 8 000 rader,
+    4 000 föremål) med tidsgränser samt fuzz med fast frö: 3 000 slumpade
+    Steam-svar, 2 500 inspect-texter, 3 000 vinstberäkningar, valutakoder,
+    bevakningar. Fynd: normalizeWatch kraschade på null (åtgärdat).
+    Ej testat: riktiga Steam-konton (kräver din proxy), riktig mobil enhet,
+    och Cloudflare-publicering.
+
+  Tester (site/tests.html, site/js/tests.js)
+    654 automatiska tester (inkl. Trade-up Covert, Sökning, Skalning/fuzz, Säkerhet, Prestanda, Visningsvaluta, Combo Finder, inventory-filter, försäljning ur lagret, Steam-import, Portfolio, Collection Planner, Sticker Finder, Skin Comparison, Watchlist, Inspect, Pattern Explorer, Trade-up och Inställningar): prisinmatning, slitagegränser, prisstatus,
+    köp/sälj-matematik, prisstatistik, vinstmotor (glidande snitt, avgifter,
+    såld mer än ägd, olika float/seed, Steam-krediter), backup (rundtur,
+    ändrad fil, äldre format, skräpdata, __proto__, proxy-adress, dubbletter,
+    förhandsvisning, merge/replace). Öppna sidan lokalt; rubriken visar
+    resultatet. Testerna rör aldrig din riktiga databas.
+    Verifierat manuellt i webbläsaren: Price Calculator, förhandsvisning,
+    ersätt, ångra, rollback vid ogiltig post, prisstatus på föremålssida.
+
+  Inventory-paket (samma datum, site/js/inv-logic.js + views/inventory.js)
+    Transaktioner
+      - "Redigera" på varje rad (typ, antal, pris, avgift, datum, marknad,
+        betalning, notering, float, seed). Föremålet byts inte – ta bort och
+        registrera på nytt för det. Redigerade rader märks "redigerad <datum>".
+      - "Ångra": senaste redigering eller borttagning kan återställas exakt
+        som den var (knapp överst; gäller tills sidan laddas om).
+      - Sök och typfilter (köp/sälj) i transaktionslistan.
+      - Varning överst när något sålts mer än köpts ("Såld mer än köpt"), och
+        en bekräftelse när man försöker sälja fler än man äger i inventory
+        eller redigerar så att det blir så. Överskottet saknar inköpspris och
+        räknas som ren vinst (som förut).
+      - Historik per föremål: klicka på namnet i listan eller ••• ->
+        "Köp- och säljhistorik" (köpt/sålt/kvar/snitt/realiserat per position
+        samt alla händelser).
+    Filter (Innehav -> Filter). Alla aktiva filter kombineras (OCH):
+      typ, vapentyp, rarity, färg, inköpspris har/saknas, min/max värde per
+      st, min/max inköpspris, float från/till, paint seed (exakt), orealiserad
+      vinst/förlust, realiserad vinst/förlust (kräver registrerad försäljning),
+      variant (normal/StatTrak/Souvenir), utan marknadspris, ovanliga varianter
+      (Souvenir samt Doppler/Fade/Case Hardened/Marble Fade), favoriter, dolda.
+    Masshantering (markera -> åtgärdsfält)
+      Favoritmarkera, dölj/visa, ta bort, "Fyll i inköpspris" (kö för de
+      markerade som saknar), "Registrera försäljning" (ett formulär för flera
+      föremål: antal och pris per rad, gemensam marknad, avgift i %, datum;
+      skapar försäljningar och tar bort exemplaren ur inventory) och
+      "Exportera (CSV)" (markerade föremål, semikolon, svenska decimaler).
+    Försäljning ur lagret görs nu av en och samma testade funktion
+    (sellFromItems), både i vanliga och i flersäljningsformuläret.
+
+  Steam-importen (site/js/steam-core.js + views/steam-import.js)
+    Flöde: SteamID/profil -> hämtning via din proxy -> FÖRHANDSVISNING ->
+    bekräfta. Inget sparas före bekräftelsen.
+    - Förhandsvisning: föremål hos Steam, unika, nya, ändrat antal, försvunna,
+      oförändrade, med utfällbara listor (nya, antal före -> efter, försvunna).
+    - Varningar: ofullständigt svar (Steam "more_items" eller proxyn "truncated"),
+      föremål utan beskrivning, import som är mycket mindre än förra (över
+      hälften försvunnet), borttagning av föremål med egna uppgifter, och
+      föremål som finns både manuellt och via Steam (räknas då dubbelt).
+    - Egna uppgifter ändras ALDRIG av importen: float, seed, anteckning,
+      namntag, favorit, dold, id och alla transaktioner följer med. Bara antalet
+      följer Steam. Manuellt tillagda föremål rörs inte.
+    - Försvunna föremål tas bara bort om rutan är ikryssad (standard på).
+    - Idempotent: samma import två gånger ger "inga ändringar" och inga
+      dubbletter (föremål matchas på marknadsnamn och behåller sitt id).
+    - Allt skrivs i EN transaktion (lägg till, uppdatera, ta bort) och en
+      säkerhetskopia sparas först: Inställningar -> "Ångra senaste
+      återställning/import".
+    - Avbryt-knapp under hämtning (AbortController); inget sparas då.
+    - Felmeddelanden: 429 (nedräkning 30 s innan "Försök igen"), privat
+      inventory (403), tomt (404), tillfälligt fel (5xx), proxyn onåbar,
+      ingen proxy inställd. Det du skrev behålls vid nytt försök.
+    - Steams JSON tvättas: tal i amount begränsas, icon_url och färg
+      valideras, texter kortas, max 60 000 föremål.
+    - Märkning: föremål från Steam får märket "Steam" i inventory, och i
+      Redigera står vad Steam senast angav (steamQty) och vad som är dina
+      egna uppgifter.
+    - Proxyn (worker/steam-proxy.js) sätter nu "truncated": true om
+      sidgränsen (6 x 5 000 föremål) nåddes. OBS: workern måste klistras in
+      på nytt i Cloudflare för att den flaggan ska komma; appen fungerar
+      även med den gamla workern.
+    - Borttaget: reservvägen som anropade Steam direkt från webbläsaren
+      (fungerar aldrig, Steam saknar CORS). Manuell JSON-inklistring finns
+      kvar (max ca 2 000 föremål, Steams egen gräns för den adressen).
+    Verifierat: 38 automatiska tester av tolkning/plan, samt hela flödet i
+    webbläsaren mot en SIMULERAD proxy (429 -> försök igen -> förhandsvisning
+    -> import -> andra importen utan ändringar). EJ verifierat: mot riktiga
+    Steam eller din riktiga Cloudflare-worker.
+
+  Portfolio Analytics (My Inventory -> fliken "Portfolio", #/inventory/portfolio)
+    (site/js/portfolio-core.js = logik, views/portfolio.js = vy)
+    - Periodväljare: 7 dagar, 30 dagar, 90 dagar, 6 månader, 1 år, Allt.
+    - Nyckeltal: totalt värde samt förändring idag (24 h), 7 d och 30 d.
+    - Graf: värde och registrerad kostnad över vald period, med köp/sälj-
+      markeringar, och en rad om hur många mätpunkter/dagar som finns.
+    - "Vad har ändrat värdet?": värdeförändring, varav nya köp (ökad
+      registrerad kostnad) och marknadsrörelse (resten), högsta/lägsta värde.
+      Uppdelningen visas bara om alla föremål har inköpspris.
+    - Vinst och förlust: investerat, orealiserad, realiserad och totalt.
+    - Koncentration: andel för största, 3, 5 och 10 största innehaven.
+      Nivå: hög = största > 40 % eller 5 största > 80 %; måttlig = 5 största
+      > 60 %; annars låg. Beskriver bara fördelning, inte om den är bra.
+    - Ägartid: värde fördelat på tid sedan första registrerade köp (under 30
+      d, 30-90 d, 90 d-1 år, över 1 år), median och äldsta. Poster utan
+      registrerat köp redovisas separat och ingår inte.
+    - Kategorier, samt listor över största värden, vinster och förluster (kr).
+    - HISTORIK ÄR ÄRLIG: allt historiskt bygger på mätpunkter som sparats i
+      webbläsaren (en ungefär var 6:e timme sidan öppnas). Finns ingen
+      mätpunkt så långt bakåt som perioden kräver används den äldsta och
+      resultatet märks "sedan N d (äldre saknas)". Inget gammalt värde räknas
+      fram ur dagens priser. 6 månader och 1 år fylls på först när det gått så
+      lång tid; sidan säger hur många dagar som finns.
+    - Begränsning: mätpunkterna innehåller bara totaler, så värde per
+      kategori eller per föremål över tid kan inte visas.
+
+  Collection Completion Planner (Explore/Collect -> Collection Tracker -> öppna en samling)
+    (site/js/planner-core.js = logik, views/collections.js = vy)
+    Panelen "Planerare" överst på varje samlingssida:
+    - Saknas, billigaste totalkostnad, dyraste kvar (3 st) och framsteg.
+    - Köpordning: alla saknade skins i ordning billigast först med löpande
+      summa. Prislösa skins står sist och gör att kostnaden märks ofullständig.
+    - Budget (kr, sparas per samling): visar hur många prissatta skins som
+      ryms (billigaste först, vilket maximerar antalet inom budgeten), vad det
+      kostar, vad som blir över och hur mycket som saknas för att ta allt.
+      Skins som ryms markeras "✓ ryms"; resten tonas ned.
+    - Mål: markera valfria saknade skins med ★ Mål (sparas per samling).
+      Planen, budgeten och dyraste-listan räknas då bara på målen. Knappar för
+      "Alla saknade som mål" och "Rensa mål". Mål som redan ägs kostar inget.
+    - Inköpslistan (Kopiera) följer planen: det som ryms i budgeten om en
+      budget är satt, annars mål eller alla saknade, i köpordning.
+    - Skins vars billigaste pris bedöms osäkert/gammalt (se prisstatus) märks.
+    - Slitagekravet (alla / MW+ / FT+ / bara FN) styr vilket pris som räknas.
+    Sortering på samlingslistan: Lägst återstående kostnad (fullt prissatta
+    först, samlingar med saknade priser efter, kompletta sist), Högst
+    återstående kostnad, Mest färdig, Minst antal kvar, Högst samlingsvärde,
+    Störst, Namn. OBS: "Billigast att slutföra" och "Lägst återstående
+    kostnad" är samma sak och finns därför som ett alternativ. Listan visar
+    "★ N mål" på samlingar där du markerat mål.
+    Mål och budgetar (kv-nycklarna colGoals och colBudgets) ingår i backup och
+    tvättas vid import.
+    Begränsningar: "Äger" avgörs av ditt inventory oavsett slitage (som förut).
+    Planen är en kostnadsuppskattning från utropspriser – verkliga köp kan
+    bli dyrare. Ingen sparad "plan" utöver mål och budget.
+
+  Sticker Finder (Create -> Sticker Finder, #/stickers)
+    (site/js/sticker-core.js = logik, views/stickers.js = vy)
+    Färgdata för stickers: tools/build_data.py analyserar varje stickerbild
+    (samma metod som för skins) och lägger c1/c2 (primär/sekundär färg), mc
+    (flerfärgad), hx och p1/p2 (andel av bilden) i stickers.json.
+      python tools/build_data.py --stickers    lägger färg på befintlig stickers.json
+      (ingår också i ett fullt bygge; resultat cachas i tools/.cache/sticker_colors.json
+       så att bara nya stickers laddas ner. Bilderna analyseras lokalt.)
+    Sök och filter: fritext (namn/spelare/lag), turnering, typ (spelare/lag/
+    event/övrigt), effekt (Foil, Holo, Gold …), färgtema (Blått, Rött, Svart och
+    guld, Lila, Grönt, Orange, Rosa, Svartvitt – eller upp till tre egna
+    färger), antal stickers (1-4), budget totalt i kr, sortering (bäst
+    färgmatchning / billigast / dyrast) och "tillåt samma sticker flera
+    gånger" (t.ex. 4 x samma).
+    Färgmatchning per sticker (0-100): primärfärg i temat 70, bara sekundärfärg
+    i temat 35; +15 om båda färgerna ingår; upp till +15 efter hur stor del av
+    bilden primärfärgen täcker; -10 för flerfärgade. Standardgräns 60.
+    Kombinationens matchning = snittet av stickernas poäng (med tema), annars
+    färglikhet = andel av färg-rösterna som går till den vanligaste färgen
+    (primär 1 röst, sekundär 1/2).
+    Kombinationer: bland de ca 40 bäst passande kandidaterna (med pris, inom
+    budget) provas alla kombinationer (tak 400 000), billigaste först så att
+    budgeten kan klippa grenar. Stickers utan marknadspris kan inte köpas och
+    utesluts. Osäkra priser (se prisstatus) varnas för.
+    Per kombination: Öppna i Workshop (förladdar stickerna i Workshopens
+    delningsformat; skinnet väljs där), Spara (sparas lokalt, kv-nyckeln
+    stickerCombos, ingår i backup) och Kopiera lista (inköpslista). Sparade
+    kombinationer visas med dagens totalpris. Även enskilda träffar visas.
+    Begränsningar: färgerna är en uppskattning från bilden, inte officiella.
+    Lag/spelare härleds ur stickernamnet (ingen separat spelardata finns i
+    schemat). Stickerpriser svänger mycket. Kombinationerna bygger på en
+    begränsad kandidatpool, så det är inte en uttömmande sökning bland alla
+    11 900 stickers. Color Explorer och Combo Finder använder ännu inte
+    stickerfärgerna.
+
+  Skin Comparison (Analyze -> Skin Comparison, #/compare; logik i site/js/compare-core.js)
+    Upp till fyra föremål sida vid sida. Rader (grupper går att dölja):
+    - Alltid: Billigast (marknad) och Prisstatus (nivå, orsaker vid hover,
+      antal marknader, för vilket slitage).
+    - Egenskaper: rarity, typ, färg, samling (länkad), paint index,
+      float-intervall med stapel samt lägsta möjliga float.
+    - Pris per slitage (FN-BS), StatTrak™ finns/från, Souvenir finns/från.
+    - Marknader: pris på Skinport, CSFloat, CS.MONEY, Swap.gg, BUFF163 och
+      Steam för valt slitage (väljare "Slitage för marknader/netto/utveckling",
+      standard FT eller närmaste som finns).
+    - Netto: vad du får ut efter avgift, samt skillnad netto mot billigaste
+      köppris i procent (visar hur mycket avgifter äter).
+    - Prisutveckling: 7, 30 och 90 dagar (Steams snittpriser, nuläge = 24 h-
+      snittet). Det är inte marknadspriset och inte en dagskurva.
+    Bästa värdet i varje rad är fetmarkerat (lägst pris, högst netto, högst
+    utveckling, lägst float). Är värdena lika, eller finns bara ett, markeras
+    inget. Sammanfattningsrutan överst visar vem som är billigast, har bäst
+    30-dagarsutveckling, lägst möjlig float och högst netto – eller "ingen
+    tydlig vinnare". Den är en jämförelse av siffror, ingen köprekommendation.
+    "Lägsta möjliga float" = skinets lägsta float (lägre brukar ge renare
+    utseende); det säger inget om pris eller kvalitet i övrigt.
+    Spara jämförelse: ange ett namn och spara – sparas lokalt (kv-nyckeln
+    savedCompares, ingår i backup och tvättas vid import) och visas som chips
+    som öppnar jämförelsen igen. Max 100 sparade.
+    Begränsning: utvecklingen finns bara för föremål med Steam-trenddata.
+
+  Watchlist (utbyggd; logik i site/js/watch-core.js, vy i views/watchlist.js)
+    - Två sorters mål: målpris i kronor (under/över) eller procent från
+      dagens pris (t.ex. -10 % eller +20 % mot priset när bevakningen skapades).
+      Procentmål räknas i USD mot startpriset och påverkas alltså inte av
+      växelkursen; målet visas också i kronor. Snabbval -5/-10/-20/+10/+20 %.
+    - Flera slitagegrader i ett svep (procentmål): kryssa i flera slitage, så
+      skapas en bevakning per slitage. Slitage utan pris hoppas över med besked.
+      Målpris i kr gäller ett slitage i taget. Variant: Normal, StatTrak™ eller
+      Souvenir (när det finns).
+    - Pausa/återuppta en bevakning: pausade ger aldrig träff, notis eller
+      banner och visas nedtonade.
+    - Grupper: valfritt gruppnamn per bevakning, gruppfilter och rubriker.
+      Notering per bevakning. Redigera mål, grupp och notering i efterhand.
+    - Visar: pris nu, mål, avstånd kvar till målet (0 eller "nått" när uppnått),
+      förändring sedan bevakningen skapades samt en minigraf från vår egna
+      prishistorik när den hunnit täcka tiden sedan skapandet.
+    - Gamla prisuppgifter: banner när snapshoten är äldre än 36 timmar, märket
+      "Gammalt pris"/"Osäkert pris" per bevakning (se prisstatus), sammanfattningsrad
+      (antal, nått målet, bevakar, pausade, gamla, väntar på pris) och statusfilter
+      "Gamla/osäkra priser". Webbläsarnotiser nämner om priset är osäkert.
+    - Föremålssidan: knappen visar "☆ Bevakas (N) – lägg till" och öppnar samma
+      dialog (FT förvalt).
+    - Notiser: bara medan sidan är öppen (kontroll var 15:e minut). Ingen
+      bakgrundsnotis – det kräver en server.
+    - Gamla bevakningar fungerar oförändrat (läses som målpris). Nya fält
+      (mode, pct, paused, group, note) tvättas vid backup-import.
+
+  Inspect & Float (Analyze -> Inspect & Float; avkodare site/js/inspect-decode.js,
+  logik site/js/inspect-core.js, vy views/inspect.js)
+    Avkodning (lokalt i webbläsaren, inget skickas): skin, float (float32,
+    8 decimaler), paint seed, paint index, item-ID, StatTrak-räknare, namntag,
+    stickers (plats, slitage) och charms (pattern), Doppler-fas ur paint index.
+    Källan visas tydligt: "Avkodat ur inspect-länken" eller "Simulering" (och
+    "Du har ändrat float/seed - det här är en simulering" med knapp för att
+    återställa). Föremål utan float i länken får en varning och float visas
+    som exempel - ingen float hittas på.
+    Validering och felmeddelanden (svenska): tom text, ingen inspect-data,
+    webbadress i stället för länk, äldre S/A/D-länk (kan inte avkodas), udda
+    antal hex-tecken (avklippt), för kort hex, trasig protobuf, defindex 0,
+    ogiltig float (utanför 0-1 eller NaN), ogiltig seed (utanför 0-1000).
+    Orimligt sticker-slitage ignoreras, namntag kortas till 40 tecken.
+    Hex med radbrytningar accepteras.
+    BEGRÄNSNING: länkens egen kontrollsumma (4 sista byten) verifieras INTE,
+    eftersom algoritmen inte kunnat bekräftas mot riktiga länkar. En länk som
+    klippts av precis vid ett fältbyte kan därför ge ett delvis resultat; då
+    saknas oftast float och sidan varnar i stället för att gissa.
+    Nytt i den här omgången:
+    - Plats i skinets möjliga float-intervall: "X % in i intervallet" och
+      "lägre än ungefär Y % av alla möjliga floats" (antar jämn fördelning, en
+      förenkling). Utanför intervallet flaggas.
+    - Avstånd till närmaste slitagegräns (0,07/0,15/0,38/0,45) när det är
+      under 0,02, t.ex. "0,0012 över gränsen, precis ovanför Factory New".
+    - Tabell "Slitage och pris": skinets slitagegrader med float-band
+      (skurna mot skinets intervall) och lägsta pris, nuvarande slitage
+      markerat. Flytta float-reglaget för att se när slitaget byter.
+    - Jämför två inspect-länkar: "Jämför med en andra länk" -> A och B sida
+      vid sida (skin, float, slitage, plats i intervallet, seed, paint index,
+      StatTrak, stickers och deras summa, lägsta pris för slitaget) samt en
+      mening om vilken som har lägst float och om slitagegraden skiljer.
+      Olika skins varnas för. Priset tar inte hänsyn till exakt float/seed.
+    - Spara resultat: avkodade länkar sparas som sin hex-kod (avkodas om när
+      de öppnas), simuleringar som skin + float + seed. Lista med Öppna, "Som
+      B" (för jämförelse) och ta bort. Sparas lokalt (kv-nyckeln
+      inspectSaved), ingår i backup och tvättas vid import.
+    Testat med SYNTETISKA länkar (byggda av en egen protobuf-kodare i
+    testerna), inte med riktiga länkar från Steam.
+
+  Pattern Explorer (Analyze -> Pattern Explorer; logik site/js/pattern-core.js,
+  vy views/patterns.js)
+    Data (oförändrad källa): site/data/patterns.json byggs av python
+    tools/build_data.py --patterns ur csgo-blue-gem-calculator och
+    csgo-fade-percentage-calculator (båda MIT). Appen räknar inget eget
+    mönstervärde - den tolkar, rankar, filtrerar och förklarar de externa
+    värdena. Blue Gem/Fade-procent är mått på mönstret, inte priser.
+    Flikar: Case Hardened / Blue Gem (inkl. Heat Treated på Five-SeveN och
+    Desert Eagle), Fade (27 vapen) och Doppler (förklaring per fas/paint index).
+    Nytt i den här omgången:
+    - Tydlig sida: "Analyserad sida: Ovansida/Magasinsida/Playside/Backside"
+      överst och på varje seed-panel, med påminnelse om att samma seed ser olika
+      ut på olika sidor.
+    - Seed-analys (sök en eller flera seeds, t.ex. "661, 670, 12-15", max 4
+      paneler): staplad färgfördelning (blå/lila/guld/övrigt), rank av antal,
+      avstånd till toppseeden, "bättre än ca X % av seeds", dominerande färg,
+      hög guldandel, histogram över alla seeds med din seed markerad, "samma
+      seed på alla sidor" (rank per sida) och seeds med liknande
+      färgfördelning (klickbara). Fade: rank med delad rank vid lika procent,
+      histogram och liknande seeds.
+    - Filter: blå från/till, lila, guld (Case Hardened) samt Fade från/till.
+    - Sortering: blå ↓/↑, lila, guld, seed (Fade: Fade % ↓/↑, seed).
+    - Jämförelse: upp till 6 seeds (var 4).
+    - Rank = konkurrensrankning (1, 2, 2, 4): seeds med samma värde delar rank.
+      Case Hardened rankas efter BLÅ andel; lila och guld påverkar inte rank.
+    - Djuplänk #/patterns/<ch|fade>/<vapen>/<seed>. Inspect & Float visar
+      länken "Visa seed N i Pattern Explorer" för Case Hardened, Heat
+      Treated och Fade (inte Amber/Acid Fade, som saknar beräknad data).
+    - Verklig datakontroll i testerna: AK-47 Case Hardened seed 661 har
+      högst blå andel på ovansidan (97,6 %, rank 1 av 1001); 27 Fade-vapen.
+    Bilder per seed: undersökt och INTE införd. Sökning efter fria, tydligt
+    licensierade seed-bilder (t.ex. för Blue Gem) gav bara kommersiella
+    guider och sajter (csgoskins.gg, steamdb.com) utan öppen licens, och
+    inget öppet dataset. Bilder därifrån får inte återanvändas utan
+    tillstånd. Alternativet vore egna renderingar ur spelfilerna (kräver
+    Valves villkor) - ej gjort.
+    Begränsningar: pris per seed/fas finns inte (prisfeeden skiljer inte på
+    dem), och förklaringen säger bara hur mönstret rankas, inte vad det är
+    värt.
+
+  Trade-up Calculator (Analyze -> Trade-up; logik site/js/tradeup-core.js, vy views/tradeup.js)
+    Regler som modelleras (kontrollerade mot aktuell CS2-dokumentation i november 2026):
+    - 10 skins av samma rarity; utfallet är en skin av nästa nivå.
+    - Alla StatTrak™ eller inga; Souvenir kan inte användas.
+    - Utfallspoolen = nästa nivås skins i inputsens samlingar. Chans för en
+      samling = antal input därifrån / 10, delat lika på samlingens skins av
+      nästa nivå (för StatTrak bara de som finns som StatTrak).
+    - Output-float = utfallsskinets lägsta + snittet av inputsens
+      normaliserade float x (högsta - lägsta). Normaliserad = (float - skinets
+      lägsta) / (skinets högsta - lägsta). Input-floats klämms till skinets
+      intervall.
+    - NY REGEL som tidigare saknades: en skin vars samling saknar nästa
+      nivå (högsta nivån i sin samling) kan inte användas - kontraktet avvisas
+      i stället för att tyst ge utfall som summerar till under 100 %.
+    COVERT -> KNIV/HANDSKE (5 skins, sedan 22 oktober 2025) - UPPSKATTNING
+    Valve publicerar inga odds. Modellen bygger på tredjepartsguider (CSDB,
+    Strafe; Valves egna anteckningar gick inte att läsa) och är INTE bekräftad
+    av Valve. Kalkylatorn visar därför en tydlig uppskattningsbanner.
+      - 5 Covert-skins från vapenfall-samlingar. Kart-, Armory- och
+        souvenirsamlingar saknar knivar och avvisas (79 av 111 Covert-skins
+        är användbara i vår data).
+      - Utfall = en kniv/handske ur FALLET som hör till inputens samling
+        (data/other.json: crate.cx kopplas till samling via crate.ci; alla 42
+        fall kopplas entydigt). Samlingens chans = antal input / 5.
+      - Chansen delas lika mellan fallets modeller x finish ("grupper"). Doppler-
+        faser Phase 1-4 delar på gruppens chans. Ruby, Sapphire, Black Pearl,
+        Emerald och faser utan känt namn (#617 m.fl.) kan förekomma men deras
+        chans är okänd: de ingår INTE i förväntat värde, som därför är en
+        NEDRE GRÄNS. (Att räkna varje fas som eget utfall skulle ge Ruby/Sapphire
+        orimligt hög chans.)
+      - Alla StatTrak -> StatTrak-kniv (handskar finns inte som StatTrak).
+        StatTrak och vanliga får inte blandas.
+      - Float = snitt av normaliserade input-floats skalat till utfallets eget
+        intervall (som vanliga kontrakt; exakt formel ej bekräftad). Vanilla-
+        knivar saknar float och prissätts utan slitage.
+      - Osäkert/ej bekräftat: kniv-/handskvikt, hur faser räknas, float-formeln
+        och eventuella float-tak på utfall. Vanliga 10-skins-kontrakt är oförändrade.
+    Beräkningar: kostnad, förväntat värde (EV, marknadspris) och EV netto efter
+    avgift, förväntad vinst och ROI (brutto/netto), break-even-kostnad (= EV,
+    brutto och netto), chans till vinst (brutto och netto), samt risk bland
+    utfall med pris: lägsta/högsta utfall, standardavvikelse, chans att få
+    mindre än hälften av kostnaden, chans att förlora pengar och mest sannolika
+    utfall. Saknade utfallspriser räknas som 0 kr (EV är då ett MINIMUM) och
+    flaggas med andel av sannolikheten; saknade inputpriser flaggas likaså.
+    Osäkra/gamla utfallspriser märks (prisstatus). Utfall med float närmare än
+    0,003 från en slitagegräns märks "nära gräns".
+    Vyn: kontroll mot regler (✓/✗/⚠), mest värdefulla utfall, samlingsfördelning
+    (input, chans per samling, antal utfall, chans per utfall), filter "visa bara
+    utfall från samling X" med chans att få något därifrån, och en utfällbar
+    steg-för-steg-förklaring med de faktiska talen för kontraktet.
+    Spara/jämför: spara kontrakt (namn, StatTrak, inputs med float/antal/eget
+    pris) lokalt (kv-nyckeln tradeupSaved, ingår i backup och tvättas vid import).
+    Listan räknas om med dagens priser och visar kostnad, EV, vinst, chans
+    till vinst och spridning; högst förväntad vinst markeras.
+    Begränsningar: priset är lägsta utropspris för utfallets slitage (inte exakt
+    float/seed/stickers); EV är ett genomsnitt, ett enskilt kontrakt ger ETT
+    utfall; skins som bara finns som Souvenir-paket hanteras inte särskilt;
+    en skin med flera samlingar räknas på första samlingen.
+
+  Inställningar och tema (Inställningar -> "Utseende och beteende"; site/js/prefs-core.js
+  = ren logik, prefs.js = tillämpning, theme-boot.js = tema före första målning)
+    Allt sparas lokalt (kv-nyckeln prefs), ingår i backup och tvättas vid
+    import. Inställningarna ändrar bara HUR sidan visas, aldrig sparad data.
+    - Tema: Mörkt (standard, som förut), Ljust eller Följ systemet. Sätts via
+      attributet data-theme på <html>; färgerna är CSS-variabler i app.css
+      (ljust tema = överskrivna variabler). theme-boot.js läser ett speglat värde
+      i localStorage och sätter temat innan sidan ritas (ingen blixt av fel
+      tema). Diagram använder currentColor/variabler så de syns i båda teman.
+      Webbläsarens theme-color uppdateras.
+    - Täthet: Normal eller Kompakt (mindre radhöjd och mellanrum, 13 px text).
+    - Kortstorlek: Små/Normala/Stora i alla kortlistor (CSS-variabeln --card-min).
+    - Bildkvalitet: Låg (60 %), Normal, Hög (150 %) – skalar bildstorleken i
+      Steams bild-URL (min 32 px, max 600 px). Låg sparar data.
+    - Animationer: Följ systemet (prefers-reduced-motion), På eller Av.
+    - Inventory: standardvy (kort/tabell), startflik, sortering och värdering
+      (riktiga pengar/Steam). Gäller första gången du öppnar Inventory per besök.
+    - Standardmarknad i Price Calculator (marknad A).
+    - Standard lägsta pris (kr) i Dagens fynd och Investeringsradar.
+    - Notiser och bevakningsbanner på/av (bara medan sidan är öppen).
+    - "Återställ utseende och beteende" återgår till standard. Avgifter och
+      prisläge ligger kvar där de alltid legat (Priser-sektionen).
+    Visningsvaluta: se nästa avsnitt (införd i en senare omgång).    Verifierat: 508 automatiska tester och genomklick i webbläsaren (ljust tema,
+    kompakt, animationer av, små kort, låg bildkvalitet, notiser av/på,
+    standardvärden i Inventory/Price Calculator/Fynd/Radar, återställning, alla 22
+    sidor utan fel). Inte kontrollerat: varje enskild sida visuellt i ljust tema
+    (genomgått: Inställningar, föremålssida med graf och kort); färger som är
+    inbyggda i vissa vyers inline-stilar justeras med några CSS-regler men kan
+    ha enstaka sämre kontrast.
+
+  Combo Finder och Color Explorer: färger för stickers och charms (site/js/combo-core.js,
+  views/combo.js, views/colors.js)
+    Färgdata: stickers (11 852 av 11 907) och charms (alla 78) har nu primär/sekundär
+    färg, flerfärgsflagga, hex och andel av bilden, framräknat med samma bildanalys
+    som för skins (python tools/build_data.py --stickers / --charms, ingår i fullt
+    bygge; cachas i tools/.cache). Det är en uppskattning, inte en officiell färgsättning.
+    Combo Finder:
+    - Färgtema: ett skin (matchning via färgnamn + hex-likhet som förut), förinställda
+      teman (Blått, Rött, Svart och guld, Lila, Grönt, Orange, Rosa, Svartvitt) eller
+      upp till 3 egna färger. "Spara färgtema" sparar teman lokalt (kv-nyckeln
+      colorThemes, ingår i backup och tvättas vid import; delas med Color Explorer).
+    - Delar: kniv, handskar, gevär, AWP, pistol, 0-4 stickers och en charm.
+      Stickers är en uppsättning (bäst matchande eller billigast, 4 x samma tillåtet)
+      och räknas som en del i kombinationen; charm är en del.
+    - Kandidater per del: de bäst matchande plus billigare alternativ, sedan alla
+      kombinationer inom budgeten (tak 40 000, flaggas om det nås), sorterade på snitt-
+      matchning, med variation (samma föremål högst 2 gånger bland förslagen) och
+      "Billigaste matchande set". Meddelar billigaste möjliga kostnad om inget ryms.
+    - Matchning för skins i temaläge = colorScore (primärfärg i temat 70, bara
+      sekundär 35, +15 båda, +täckning, -10 flerfärgad; samma formel som Sticker
+      Finder). Stickers/charms bedöms på samma sätt.
+    - Öppna i Loadout Builder: kniv, handskar och vapen läggs i rätt platser. Sidan
+      väljs efter vilka vapen som bara finns på ena sidan (AK-47/Glock = T, M4/USP-S
+      = CT); vapen som inte passar sidan hoppas över med besked. Stickers och charm
+      ingår inte i Loadout.
+    - Öppna stickers/charm i Workshop: vapnet, slitaget, stickers och charm förladdas.
+    - Kopiera inköpslista.
+    Color Explorer: typ "Stickers" och "Charms" (färg, täckning, flerfärg, pris),
+    sparade färgteman (klicka för att välja färgerna, spara valda 1-3 färger),
+    och Match My Skin visar nu även matchande stickers och charms.
+    Begränsningar: stickers/charms har bara färgnamn och täckning (matchningen är
+    grövre än för skins); sticker-priser är marknadspris utan sticker-premium; en
+    kombination av AK-47 och M4 kan inte ligga i samma Loadout (en sida väljs).
+    Verifierat: 535 tester (kandidater, kombinationer, budgetgränser, tak, variation,
+    Loadout/Workshop-länkar, tvätt av teman) samt genomklick i webbläsaren (tema +
+    budget + stickers + charm, spara tema, öppna i Loadout och Workshop, Color Explorer
+    med stickers/charms, Match My Skin).
+
+  Visningsvaluta (Inställningar -> Visningsvaluta; site/js/money-core.js = ren logik, util.js = lager)
+    Alternativ: SEK (standard), USD, EUR, NOK, DKK. Kurser (enheter per USD) hämtas
+    från open.er-api.com tillsammans med kronkursen (högst var 12:e timme, cachas i
+    kv-nyckeln fx, och läses från cachen före första sidan). Saknas kurs för vald
+    valuta visas kronor (vi hittar aldrig på en kurs) och Inställningar/sidomenyn visar
+    vilken valuta som faktiskt används.
+    PRINCIPER
+    - ALLA sparade belopp (inköp, försäljningar, avgifter, målpriser, budgetar,
+      standardpris-filter) är och förblir i KRONOR. Valutavalet ändrar aldrig sparad
+      data, och backuper/CSV-export innehåller fortfarande kronor.
+    - Visning: kr() i util.js räknar om kronor till vald valuta med dagens kurs och
+      formaterar (SEK "12,50 kr", EUR "9,00 €", USD "10,00 US$", NOK/DKK med kod). Alla
+      belopp på sidan går genom kr()/krUsd()/signKr().
+    - Inmatning: alla beloppsfält tolkas i vald valuta och räknas om till kronor innan
+      de sparas (parseMoney/moneyFromNum). Fältens etiketter visar valutan, t.ex.
+      "Målpris (€)". Fält som fylls i på förhand (marknadspris, redigering) visas i vald
+      valuta (inputMoney). Valutaord/symboler som "€", "$", "kr", "eur" får stå i det
+      man skriver. Sidan laddas om när man byter valuta så att inga fält eller listor
+      visar gamla enheter.
+    - Redigera transaktion/bevakning: rör man inte pris- eller avgiftsfältet behålls
+      det exakta sparade kronbeloppet (ingen avrundning via valutan). Ändras fältet
+      sparas det inskrivna beloppet omräknat med dagens kurs.
+    - Eftersom kursen ändras visas samma kronbelopp olika dag för dag i annan valuta.
+      Det är avsett. Procent och antal påverkas inte.
+    Berörda ställen (inmatning): Price Calculator, inköps-/försäljnings-/redigerings-
+    och flersäljningsdialogerna, inventory-filter (värde/inköp), Watchlist (målpris,
+    redigera), Collection Planner (budget), Combo Finder, Sticker Finder, Dagens fynd,
+    Investeringsradar (lägsta pris; standard 30 resp. 100 kr omräknat), Color Explorer
+    och Database (min/max), Match My Skin, Loadout (budget, maxpris), Trade-up (pris per
+    st), Sell Calculator och Standardinställningen för lägsta pris. Sök ("blå kniv
+    under 3000") tolkar belopp i vald valuta.
+    Begränsningar: CSV-import/export av transaktioner är alltid i kronor (kolumnerna
+    pris_per_st och avgift). Kursen är en dagskurs från ett gratis API, inte
+    bankens kurs. Steam-priser och marknadspriser kommer i USD och räknas via
+    kronkursen: ett belopp i annan valuta går alltså USD -> SEK -> vald valuta.
+    Verifierat: 579 automatiska tester (omräkning, formatering, inmatning, saknade
+    kurser, avrundning) och genomklick i webbläsaren med euro (alla 23 sidor, redigera
+    transaktion utan ändring behåller 100 kr exakt, ändrat pris 9 EUR sparas som
+    101,01 kr, bevakning 5 EUR sparas som 56,12 kr, Price Calculator i euro, tillbaka
+    till kronor).
+
+  Mobil och prestanda (site/css/app.css, index.html, js/app.js m.fl.)
+    MÄTT (Claude Code-förhandsvisning med emulerad mobil 375 x 812 och 320 x 640, inte en riktig telefon):
+    - Överflöde i sidled: 0 av 25 sidor vid 375 px och 0 av 24 vid 320 px (fanns inte förut heller).
+    - Tryckytor: före åtgärd hade 300+ knappar, chips, fält och val under 30 px höjd; efter
+      åtgärd 0 under 34 px på alla 24 sidor (med 5 000 föremål och 5 000 transaktioner inlagda).
+    MOBIL (CSS, @media max-width 760/360 px):
+    - Min 40 px (knappar små: 36 px) för knappar, fält, val, chips, flikar och menyer.
+    - 16 px text i inmatningsfält (annars zoomar iOS in sidan vid fokus).
+    - Större rad- och checkboxytor, dialogruta som bottenpanel (full bredd, max 94 % av höjden),
+      flikraden med 52 px höjd, toast som ryms, KPI-rutornas växlare bryts över flera rader
+      (förut klipptes "Steam"), färgväljare 40 px. Extra smal layout under 360 px.
+    PRESTANDA:
+    - Kodsplittring: vyerna importeras först när man öppnar dem (import() per route).
+      Start: 20 moduler / ca 138 kB JS i stället för 52 filer / 563 kB. Bevakningsmodulen
+      laddas bara om det finns bevakningar. recordSnapshot ligger i egen modul
+      (js/snapshot.js, återexporteras från inventory.js).
+    - Data och kärnmoduler förhämtas parallellt med preload/modulepreload i index.html
+      (data-filerna startar efter ca 20 ms i stället för efter modulträdet) samt preconnect
+      till Steams bild-CDN. Varje data-fil hämtas en gång (inga dubbelhämtningar).
+    - Stora listor: Transaktioner och Vinst per föremål visar 150 rader i taget med "Visa fler"
+      (med 5 000 transaktioner: 70 098 -> 2 199 DOM-noder, 5 000 vinstrader: 41 165 -> 2 176).
+      Köp/sälj-markeringarna i värdegrafer slås ihop per dag och typ (max ca 250), så Analys
+      gick från 10 577 till 1 077 noder.
+    - Global sökning räknar gemener en gång per föremål (cache) och slår bara upp priser för
+      de 7 träffar som visas: värsta fallet ("a", 14 342 träffar) 38 -> 11 ms.
+    - Investeringsradar räknar om analysen bara när prisdata/historik/avgifter ändras, inte vid
+      varje filterändring (ca 115-165 ms sparas per ändring).
+    - Redan bra/oförändrat: data-JSON tolkas på under 60 ms totalt (13 MB okomprimerat); inventory-
+      beräkningar (5 000 föremål, 5 000 transaktioner) tar ca 110 ms; längsta main-thread-
+      uppgift per sidbyte med stor data ca 60 ms; lazy-laddade bilder, content-visibility på
+      kortlistor, debounce på sök och filter, historik hämtas först när den behövs.
+    EJ GJORT / OVERIFIERAT:
+    - Ingen test på riktig telefon eller med strypt nätverk (emulerad mobil, lokal server).
+      Förstagångsladdningen över mobilnät är fortfarande ca 13 MB okomprimerat (ca 3 MB med
+      gzip/brotli): stickers.json (5 MB) och prices.json (4 MB) är störst. Stickers laddas nu i
+      bakgrunden (se Lazy-load av klistermärken) men filen hämtas fortfarande vid start.
+    - Ingen virtualisering (rad-återanvändning vid scroll) och inga Web Workers: tunga
+      beräkningar tar ca 100 ms, så det gav ingen verklig nytta. Listorna sidindelas i stället.
+    - Att komprimering (gzip/brotli) är påslagen och att _headers cachar rätt avgörs av
+      Cloudflare vid publicering och är inte verifierat här.
+
+  EJ gjort i den här omgången (se även avsnitt 19): 6-12 månaders grafer med
+  riktig data (kräver tid, se ovan)
+  (kräver längre egen historik), Portfolio Analytics, Collection Completion
+  Planner, Sticker Combination Finder, sticker-/charmfärger, utökad Workshop,
+  Inspect-jämförelse, Pattern- och Trade-up-utbyggnad, Watchlist-utbyggnad,
+  tema/valuta/kompakt läge, virtualisering av långa listor.
+
+=====================================================================
+19. IDÉER FÖR FRAMTIDEN
+=====================================================================
+  - Valutaval (EUR, USD, NOK, DKK): GJORT (se 18e, Visningsvaluta). Ursprunglig bakgrund: all din data sparas i
+    kronor och varje inmatningsfält skulle behöva omvandlas, annars blir
+    gamla köp fel. Kräver en genomtänkt omräkning.
+  - Färgdata för stickers (så Combo Finder kan matcha dem också)
+  - Investeringsradar som också använder vår egen dagliga prishistorik
+    (history.json) när den blivit tillräckligt lång
+  - Offentliga profiler / Rare Item Finder
+  - Verklig 3D-förhandsvisning i Workshop
+  - Notiser när sidan är stängd (kräver server eller schemalagd tjänst)
+=====================================================================
+  SLUT
+=====================================================================

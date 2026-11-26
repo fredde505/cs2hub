@@ -1,9 +1,9 @@
 import { getKV, setKV } from "./store.js";
-import { setRate, fx, WEAR_LONG, WEARS } from "./util.js";
+import { setRate, setRates, fx, WEAR_LONG, WEARS } from "./util.js";
 import { PRICES_URL, HISTORY_URL } from "./config.js";
 
 export const D = {
-  skins: [], stickers: [], other: [], collections: [], catalog: [],
+  skins: [], stickers: [], other: [], collections: [], catalog: [], stickersReady: false, stickersFailed: false, stickersPromise: null, nSkinCat: null,
   byId: new Map(), mhn: new Map(), colById: new Map(),
   P: { src: [], p: {}, t: 0 }, trend: new Map(), live: false, priceAge: 0,
 };
@@ -35,12 +35,34 @@ export function mhnFor(skin, wear, { st = false, sv = false } = {}) {
   return wear ? `${n} (${WEAR_LONG[wear]})` : n;
 }
 
+/* ---- Klistermärken (stora filen) laddas i bakgrunden och slås ihop med katalogen först när de behövs ---- */
+let stickerFetch = null;
+function startStickers() { if (!stickerFetch) { stickerFetch = json("data/stickers.json"); stickerFetch.catch(() => { }); } return stickerFetch; }
+/** Väntar tills klistermärkena är inlästa och inlagda i D.catalog/D.byId/D.mhn. Anropa före allt som slår upp eller listar stickers. Misslyckas hämtningen fortsätter appen utan dem (D.stickersFailed). */
+export function ensureStickers() {
+  if (D.stickersPromise) return D.stickersPromise;
+  D.stickersPromise = (async () => {
+    try {
+      const stickers = await startStickers();
+      for (const s of stickers) { s.kind = "sticker"; s.type = "sticker"; s.mh = s.mh || s.n; D.byId.set(s.id, s); D.mhn.set(s.mh, { e: s }); }
+      D.stickers = stickers;
+      const n = D.nSkinCat ?? D.catalog.length;
+      D.catalog = D.catalog.slice(0, n).concat(stickers, D.catalog.slice(n));
+    } catch { D.stickersFailed = true; }
+    D.stickersReady = true;
+    try { dispatchEvent(new Event("cs2-stickers")); } catch { /* ignorera */ }
+    return D;
+  })();
+  return D.stickersPromise;
+}
+
 export async function loadData(onStatus = () => { }) {
-  const [skins, stickers, other, collections, prices] = await Promise.all([
-    json("data/skins.json"), json("data/stickers.json"), json("data/other.json"),
+  startStickers(); /* hämtas parallellt men blockerar inte första sidan (5 MB) – se ensureStickers() */
+  const [skins, other, collections, prices] = await Promise.all([
+    json("data/skins.json"), json("data/other.json"),
     json("data/collections.json"), json("data/prices.json").catch(() => null),
   ]);
-  D.skins = skins; D.stickers = stickers; D.other = other; D.collections = collections;
+  D.skins = skins; D.other = other; D.collections = collections;
   if (prices) { D.P = prices; D.priceAge = prices.t * 1000; }
   // Färskare prissnapshot från förra besöket (hämtad från grenen "prices") går före den inbyggda filen
   try { const c = await getKV("pricesCache"); if (okPrices(c?.data) && c.data.t > (D.P.t || 0)) { D.P = c.data; D.priceAge = c.data.t * 1000; } } catch { /* ignorera */ }
@@ -80,7 +102,7 @@ export async function loadData(onStatus = () => { }) {
       if (s.sv) setM(mhnFor(s, w, { sv: true }), { e: s, wear: w, st: false, sv: true });
     }
   }
-  for (const s of stickers) { s.kind = "sticker"; s.type = "sticker"; s.mh = s.mh || s.n; cat.push(s); D.byId.set(s.id, s); D.mhn.set(s.mh, { e: s }); }
+  D.nSkinCat = cat.length; /* stickers sätts in här när de har laddats */
   for (const o of other) {
     o.kind = o.ty === "crate" ? (o.ct === "Case" || o.ct === "Souvenir" || o.ct === "Music Kit Box" ? "case" : CAPSULE_TYPES.has(o.ct) ? "capsule" : "case") : o.ty;
     o.mh = o.mh || (o.ty === "music" ? "Music Kit | " + o.n : o.n);
@@ -201,31 +223,41 @@ export function lookup(mhn) { return D.mhn.get(mhn) || null; }
 export function imgOf(entry) { return entry?.img || ""; }
 
 /** Kontrollerar att en prisfil (från nätet eller lokal cache) har rätt form innan den används – skadad eller manipulerad data ska aldrig nå gränssnittet. */
-function okPrices(j) {
+export function okPrices(j) {
   if (!j || typeof j !== "object" || !Number.isFinite(j.t) || j.t * 1000 > Date.now() + 864e5 || j.t < 1e9) return false;
   if (!j.p || typeof j.p !== "object" || Array.isArray(j.p)) return false;
   const vals = Object.values(j.p); if (!vals.length) return false;
   const rowOk = r => Array.isArray(r) && r.length <= 12 && r.every(x => x == null || (typeof x === "number" && x >= 0 && x < 1e7));
-  const step = Math.max(1, Math.floor(vals.length / 400)); // stickprov över hela filen
-  for (let i = 0; i < vals.length; i += step) if (!rowOk(vals[i])) return false;
-  if (j.tr != null && (typeof j.tr !== "object" || Array.isArray(j.tr))) return false;
+  for (let i = 0; i < vals.length; i++) if (!rowOk(vals[i])) return false; // ALLA rader kontrolleras (ca 10 ms för 38 000 rader)
+  if (j.tr != null) {
+    if (typeof j.tr !== "object" || Array.isArray(j.tr)) return false;
+    for (const t of Object.values(j.tr)) if (!Array.isArray(t) || t.length > 4 || !t.every(x => x == null || (typeof x === "number" && x >= 0 && x < 1e7))) return false;
+  }
   return true;
 }
-const okHistory = j => j && Array.isArray(j.d) && j.d.length <= 400 && j.d.every(x => typeof x === "string" && /^\d{4}-\d{2}-\d{2}$/.test(x)) && j.p && typeof j.p === "object" && !Array.isArray(j.p) && Object.values(j.p).slice(0, 200).every(s => Array.isArray(s) && s.length === j.d.length && s.every(x => x == null || (typeof x === "number" && x >= 0 && x < 1e7)));
+export const okHistory = j => j && Array.isArray(j.d) && j.d.length <= 400 && j.d.every(x => typeof x === "string" && /^\d{4}-\d{2}-\d{2}$/.test(x)) && j.p && typeof j.p === "object" && !Array.isArray(j.p) && Object.values(j.p).every(s => Array.isArray(s) && s.length === j.d.length && s.every(x => x == null || (typeof x === "number" && x >= 0 && x < 1e7)));
 
+/* ------------- valutakurser (kronor + visningsvalutor) ------------- */
+const FX_CODES = ["SEK", "EUR", "NOK", "DKK"]; // USD = 1 per definition
+const okFx = x => x && Number.isFinite(x.t) && Number.isFinite(x.rate) && x.rate > 1 && x.rate < 100;
+const pickRates = r => { const o = { USD: 1 }; for (const k of FX_CODES) if (r && typeof r[k] === "number" && r[k] > 0 && r[k] < 1e4) o[k] = r[k]; return o; };
+/** Läser senast sparade kurser ur lokal cache (ingen nätverksanrop) så att första sidan redan visas i rätt valuta. */
+export async function loadCachedFx() {
+  try { const c = await getKV("fx"); if (okFx(c)) { setRate(c.rate); if (c.rates) setRates(c.rates); fx.updated = c.t; } } catch { /* ignorera */ }
+}
 /* ------------- levande uppdatering (Steam-priser + valuta) med cache ------------- */
 export async function refreshLive(onStatus = () => { }, force = false) {
   // valuta
   try {
-    let c = await getKV("fx"); const okFx = x => x && Number.isFinite(x.t) && Number.isFinite(x.rate) && x.rate > 1 && x.rate < 100;
-    if (!okFx(c) || Date.now() - c.t > 12 * 3600e3) {
+    let c = await getKV("fx");
+    if (!okFx(c) || !c.rates || Date.now() - c.t > 12 * 3600e3) {
       const j = await json("https://open.er-api.com/v6/latest/USD");
-      c = { t: Date.now(), rate: +j.rates.SEK };
+      c = { t: Date.now(), rate: +j.rates.SEK, rates: pickRates(j.rates) };
       if (!okFx(c)) throw new Error("ogiltig växelkurs");
       await setKV("fx", c);
     }
-    setRate(c.rate); fx.updated = c.t;
-  } catch { const c = await getKV("fx"); if (c && Number.isFinite(c.rate) && Number.isFinite(c.t)) { setRate(c.rate); fx.updated = c.t; } }
+    setRate(c.rate); if (c.rates) setRates(c.rates); fx.updated = c.t;
+  } catch { const c = await getKV("fx"); if (okFx(c)) { setRate(c.rate); if (c.rates) setRates(c.rates); fx.updated = c.t; } }
   // Priser: ingen prisleverantör anropas från webbläsaren (de saknar CORS). GitHub Actions publicerar en färsk snapshot
   // på grenen "prices" (en enda commit, så repot växer inte). Den hämtas högst en gång i timmen och cachas lokalt.
   // Reserv: den inbyggda data/prices.json.

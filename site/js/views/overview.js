@@ -1,6 +1,6 @@
 import { esc, kr, krm, signKr, pct, cls, lineChart, imgUrl, COLORS } from "../util.js";
 import { all } from "../store.js";
-import { D, bestUsd } from "../data.js";
+import { D, bestUsd, ensureStickers } from "../data.js";
 import { usd2sek } from "../util.js";
 import { loadState, buildRows, totals } from "../finance.js";
 import { pageHead, stat, itemCard } from "./common.js";
@@ -36,8 +36,9 @@ export async function renderOverview(root) {
     ${watch.length ? `<div class="panel" style="margin-bottom:14px"><div class="row spread"><h2 style="margin:0">Dina bevakningar</h2><a class="muted small" href="#/watchlist" style="text-decoration:underline">Alla (${watch.length}) →</a></div>${watch.slice(0, 5).map(w => { const cur = usd2sek(bestUsd(w.mhn)), hit = cur != null && (w.dir === "below" ? cur <= w.target : cur >= w.target); return `<div class="row spread" style="padding:7px 0;border-bottom:1px solid var(--line)"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(w.mhn)}</span><span class="num small">${krm(cur)} <span class="muted">${w.dir === "below" ? "≤" : "≥"} ${kr(w.target)}</span> ${hit ? '<b class="pos">● nått</b>' : ""}</span></div>`; }).join("")}</div>` : ""}
     <div class="grid cols-4">
       ${pillar("COLLECT", "My Inventory", "Innehav, inköp och vinst i kronor.", "#/inventory")}
-      ${pillar("EXPLORE", "Database", `${D.skins.length.toLocaleString("sv-SE")} skins, ${D.stickers.length.toLocaleString("sv-SE")} stickers och mer.`, "#/database")}
+      ${pillar("EXPLORE", "Database", `${D.skins.length.toLocaleString("sv-SE")} skins, <span data-stn>${D.stickersReady ? D.stickers.length.toLocaleString("sv-SE") : "tusentals"}</span> stickers och mer.`, "#/database")}
       ${pillar("EXPLORE", "Color Explorer", "Hitta skins efter färg, pris och slitage.", "#/colors")}
       ${pillar("ANALYZE", "Market & Tools", "Prisjämförelse, avgifter och rörelser.", "#/market")}
     </div>`;
+  if (!D.stickersReady) ensureStickers().then(() => { const el = root.querySelector("[data-stn]"); if (el) el.textContent = D.stickers.length.toLocaleString("sv-SE"); });
 }

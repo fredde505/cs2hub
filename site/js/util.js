@@ -2,10 +2,18 @@ export const $ = (s, r = document) => r.querySelector(s);
 export const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 export const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 export const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
+/** Sökord ur en fråga. Förstår inklistrade Steam-namn: "AK-47 | Redline (Field-Tested)" → ak-47, redline (katalogen saknar slitage i namnet). */
+export const searchTerms = q => String(q).toLowerCase()
+  .replace(/\(?\s*(factory new|minimal wear|field-tested|well-worn|battle-scarred)\s*\)?/g, " ")
+  .replace(/\(\s*[a-z-]*\s*$/, " ")
+  .split(/\s+/).filter(t => t && !/^[|★™]+$/.test(t));
 export const debounce = (fn, ms = 160) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 
 export const IMG_BASE = "https://community.akamai.steamstatic.com/economy/image/";
-export const imgUrl = (s, size = "256fx192f") => !s ? "" : s.startsWith("http") ? s : IMG_BASE + s + "/" + size;
+/** Visningsinställningar som påverkar utseendet (sätts av prefs.js). imgScale = bildkvalitet. */
+export const ui = { imgScale: 1 };
+const scaleSize = size => { const m = /^(\d{1,4})fx(\d{1,4})f$/.exec(size); if (!m || ui.imgScale === 1) return size; return Math.max(32, Math.min(600, Math.round(+m[1] * ui.imgScale))) + "fx" + Math.max(24, Math.min(600, Math.round(+m[2] * ui.imgScale))) + "f"; };
+export const imgUrl = (s, size = "256fx192f") => !s ? "" : s.startsWith("http") ? s : IMG_BASE + s + "/" + scaleSize(size);
 
 export const WEARS = ["FN", "MW", "FT", "WW", "BS"];
 export const WEAR_LONG = { FN: "Factory New", MW: "Minimal Wear", FT: "Field-Tested", WW: "Well-Worn", BS: "Battle-Scarred" };
@@ -20,13 +28,31 @@ export const COLOR_LABEL = { red: "Röd", orange: "Orange", gold: "Guld/Gul", gr
 export const rarityOrder = ["Consumer Grade", "Base Grade", "Industrial Grade", "Mil-Spec Grade", "High Grade", "Restricted", "Remarkable", "Classified", "Exotic", "Covert", "Extraordinary", "Contraband"];
 
 /* ---- valuta (visar SEK; priskällorna är USD) ---- */
-export const fx = { rate: 9.8, updated: null };
+import { formatMoney, unitsPerSek, effectiveCode, displayToSek, sekToDisplay, CURRENCY_NOISE, CURRENCIES } from "./money-core.js";
+export const fx = { rate: 9.8, updated: null, rates: {} }; // rate = kr per USD; rates = enheter per USD för övriga valutor (visningsvaluta)
 export function setRate(r) { if (r > 1) fx.rate = r; }
+/** Kurser (enheter per USD) för visningsvalutor. Ogiltiga värden ignoreras. */
+export function setRates(r) { if (!r || typeof r !== "object") return; const o = {}; for (const k of Object.keys(CURRENCIES)) if (typeof r[k] === "number" && r[k] > 0 && Number.isFinite(r[k])) o[k] = r[k]; fx.rates = o; if (o.SEK > 1) fx.rate = o.SEK; }
+/** Vald visningsvaluta (money.code) – sätts av prefs.js. Alla sparade belopp är kronor; detta är bara hur de visas och matas in. */
+export const money = { code: "SEK" };
 const nf0 = new Intl.NumberFormat("sv-SE", { maximumFractionDigits: 0 });
-const nf2 = new Intl.NumberFormat("sv-SE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const rt = () => ({ ...fx.rates, SEK: fx.rate });
+export const curCode = () => effectiveCode(money.code, rt());
+export const curSym = () => CURRENCIES[curCode()].sym;
+const perSek = () => unitsPerSek(curCode(), rt()) ?? 1;
+/** kronor -> visningsvaluta, och tillbaka. */
+export const toDisp = sek => sekToDisplay(sek, perSek());
+export const fromDisp = x => displayToSek(x, perSek());
+/** Värde att fylla i ett inmatningsfält (visningsvalutan, utan tusentalsavskiljare). */
+export const inputMoney = (sek, d = 2) => (sek == null || !isFinite(sek) ? "" : dec(toDisp(sek), d).replace(/\s/g, ""));
+/** Läser ett belopp skrivet i visningsvalutan och ger KRONOR (eller null). */
+export const parseMoney = s => { const v = parseDec(s); return v == null ? null : fromDisp(v); };
+/** Ett tal från ett number-fält i visningsvalutan -> kronor (tom/ogiltig -> null). */
+export const moneyFromNum = v => (v === "" || v == null || !Number.isFinite(+v) ? null : fromDisp(+v));
 /** Svensk decimalformatering med komma (och tunt mellanslag som tusentalsavskiljare). */
 export const dec = (v, d = 2) => v == null || !isFinite(v) ? "–" : Number(v).toLocaleString("sv-SE", { minimumFractionDigits: d, maximumFractionDigits: d });
-export const kr = v => v == null || isNaN(v) ? "–" : (Math.abs(v) >= 1000 ? nf0.format(v) : nf2.format(v)) + " kr";
+/** Formaterar ett belopp i KRONOR (lagringsenheten) i vald visningsvaluta. Kronor ger "12,50 kr". */
+export const kr = v => (v == null || isNaN(v) ? "–" : formatMoney(v, curCode(), perSek()));
 export const usd2sek = v => v == null ? null : v * fx.rate;
 export const krUsd = v => kr(usd2sek(v));
 /** Pris eller tydlig "Pris saknas"-markering. Används överallt där ett saknat pris annars kunde se ut som 0 kr. */
@@ -43,7 +69,7 @@ export const num = (v, d = 4) => dec(v, d);
 /** Läser tal som människor skriver dem: "1 234,50", "12.5 kr", "3,12". Ger null om det inte går att tolka. */
 export function parseDec(s) {
   if (s == null) return null;
-  let t = String(s).replace(/kr|sek|:-|\s| | /gi, "");
+  let t = String(s).replace(CURRENCY_NOISE, "").replace(/\s|\u00a0|\u202f/g, "");
   if (!/^-?[\d.,]+$/.test(t)) return null;
   const lc = t.lastIndexOf(","), ld = t.lastIndexOf("."), last = Math.max(lc, ld);
   if (last >= 0) {
@@ -130,7 +156,7 @@ export async function copyText(text, okMsg = "Kopierat") {
 }
 
 /* ---- SVG-linjegraf med hover-information ---- */
-export function lineChart(points, { w = 640, h = 180, fmt = v => nf0.format(v), color = "#e7e9ec", fill = true, since = null } = {}) {
+export function lineChart(points, { w = 640, h = 180, fmt = v => nf0.format(v), color = "currentColor", fill = true, since = null } = {}) {
   if (!points || points.length < 2) {
     const first = points?.[0]?.x ?? since;
     return `<div class="empty small">${first ? `Historiken börjar ${fmtDate(first)}. ` : ""}Grafen visas när det finns minst två mätpunkter – en sparas automatiskt ungefär var 6:e timme du öppnar sidan.</div>`;
@@ -150,7 +176,7 @@ export function lineChart(points, { w = 640, h = 180, fmt = v => nf0.format(v), 
   const dots = points.filter((_, i) => i % step === 0 || i === points.length - 1).map(p => `<circle class="hov" cx="${f1(X(p.x))}" cy="${f1(Y(p.y))}" r="7"><title>${esc(fmtDateTime(p.x))}: ${esc(fmt(p.y))}</title></circle>`).join("");
   const change = last.y - points[0].y;
   return `<svg class="chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="Värdeutveckling ${esc(lbl(x0))} till ${esc(lbl(x1))}">
-    ${[0, .5, 1].map(f => `<line x1="${pad.l}" x2="${w - pad.r}" y1="${pad.t + f * (h - pad.t - pad.b)}" y2="${pad.t + f * (h - pad.t - pad.b)}" stroke="#2a2d33"/>`).join("")}
+    ${[0, .5, 1].map(f => `<line x1="${pad.l}" x2="${w - pad.r}" y1="${pad.t + f * (h - pad.t - pad.b)}" y2="${pad.t + f * (h - pad.t - pad.b)}" style="stroke:var(--line)"/>`).join("")}
     ${fill ? `<path d="${area}" fill="${color}" opacity=".07"/>` : ""}
     <path d="${d}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linejoin="round"/>
     <circle cx="${X(last.x)}" cy="${Y(last.y)}" r="3" fill="${color}"/>${dots}
@@ -160,6 +186,15 @@ export function lineChart(points, { w = 640, h = 180, fmt = v => nf0.format(v), 
   </svg><div class="muted small" style="margin-top:4px">Från ${fmtDate(x0)} · ${change >= 0 ? "+" : "−"}${esc(fmt(Math.abs(change)))} sedan start · håll muspekaren över en punkt för detaljer</div>`;
 }
 
+/** Många köp/sälj-markeringar slås ihop per dag (max ca 250 st) så att grafen inte får tusentals SVG-element. */
+export function thinMarks(marks, max = 250) {
+  if (!marks || marks.length <= max) return marks || [];
+  const m = new Map();
+  for (const k of marks) { const key = Math.floor(k.x / 864e5) + k.type, g = m.get(key); if (g) { g.n++; g.tip = null; } else m.set(key, { x: k.x, type: k.type, n: 1, tip: k.tip }); }
+  let out = [...m.values()].map(g => ({ x: g.x, type: g.type, n: g.n, tip: g.tip || `${g.n} ${g.type === "sell" ? "försäljningar" : "köp"} den dagen` }));
+  if (out.length > max) out = out.sort((a, b) => b.x - a.x).slice(0, max); // behåll de senaste
+  return out;
+}
 /** Graf med flera linjer och (valfritt) lodräta markeringar för t.ex. köp och försäljningar. series: [{name,color,dash?,pts:[{x,y}]}], marks: [{x,type:"buy"|"sell",tip}] */
 export function multiChart(series, { w = 640, h = 210, fmt = v => nf0.format(v), marks = [], since = null } = {}) {
   const live = series.filter(s => s.pts && s.pts.length);
@@ -178,10 +213,10 @@ export function multiChart(series, { w = 640, h = 210, fmt = v => nf0.format(v),
     const dots = k === 0 ? s.pts.filter((_, i) => i % step === 0 || i === s.pts.length - 1).map(p => `<circle class="hov" cx="${f1(X(p.x))}" cy="${f1(Y(p.y))}" r="7"><title>${esc(fmtDateTime(p.x))}: ${esc(s.name)} ${esc(fmt(p.y))}</title></circle>`).join("") : "";
     return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${k === 0 ? 1.8 : 1.4}" ${s.dash ? `stroke-dasharray="${s.dash}"` : ""} stroke-linejoin="round"/>${dots}`;
   }).join("");
-  const mk = marks.filter(m => m.x >= x0 && m.x <= x1).map(m => `<line x1="${f1(X(m.x))}" x2="${f1(X(m.x))}" y1="${h - pad.b - 9}" y2="${h - pad.b}" stroke="${m.type === "sell" ? "#d8645a" : "#5fb06c"}" stroke-width="2"><title>${esc(m.tip || (m.type === "sell" ? "Försäljning" : "Köp"))}</title></line>`).join("");
+  const mk = thinMarks(marks).filter(m => m.x >= x0 && m.x <= x1).map(m => `<line x1="${f1(X(m.x))}" x2="${f1(X(m.x))}" y1="${h - pad.b - 9}" y2="${h - pad.b}" stroke="${m.type === "sell" ? "#d8645a" : "#5fb06c"}" stroke-width="2"><title>${esc(m.tip || (m.type === "sell" ? "Försäljning" : "Köp"))}</title></line>`).join("");
   const legend = live.map(s => `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:12px"><i style="display:inline-block;width:14px;height:0;border-top:2px ${s.dash ? "dashed" : "solid"} ${s.color}"></i>${esc(s.name)}</span>`).join("");
   return `<svg class="chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(live.map(s => s.name).join(" och "))} över tid">
-    ${[0, .5, 1].map(f => `<line x1="${pad.l}" x2="${w - pad.r}" y1="${pad.t + f * (h - pad.t - pad.b)}" y2="${pad.t + f * (h - pad.t - pad.b)}" stroke="#2a2d33"/>`).join("")}
+    ${[0, .5, 1].map(f => `<line x1="${pad.l}" x2="${w - pad.r}" y1="${pad.t + f * (h - pad.t - pad.b)}" y2="${pad.t + f * (h - pad.t - pad.b)}" style="stroke:var(--line)"/>`).join("")}
     ${paths}${mk}
     <text x="${pad.l}" y="${h - 5}">${lbl(x0)}</text><text x="${w - pad.r}" y="${h - 5}" text-anchor="end">${lbl(x1)}</text>
     <text x="${w - pad.r}" y="${pad.t + 8}" text-anchor="end">${esc(fmt(y1))}</text><text x="${w - pad.r}" y="${h - pad.b - 12}" text-anchor="end">${esc(fmt(y0))}</text></svg>

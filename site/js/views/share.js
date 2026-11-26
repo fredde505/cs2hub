@@ -5,7 +5,12 @@ import { pageHead, KIND_LABEL } from "./common.js";
 /* Delning utan server: hela samlingen packas (deflate) i länkens #-del – inget laddas upp någonstans. */
 const b64 = u8 => btoa(String.fromCharCode(...u8)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const unb64 = s => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0));
-async function pipe(bytes, stream) { return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer()); }
+/** Kör data genom en (de)komprimeringsström med tak på utdata, så att en liten manipulerad länk inte kan expandera till gigabyte ("zip-bomb"). */
+async function pipe(bytes, stream, max = 4e6) {
+  const reader = new Blob([bytes]).stream().pipeThrough(stream).getReader(), chunks = []; let n = 0;
+  for (;;) { const { done, value } = await reader.read(); if (done) break; n += value.length; if (n > max) { await reader.cancel(); throw new Error("För stor data i länken"); } chunks.push(value); }
+  const out = new Uint8Array(n); let o = 0; for (const c of chunks) { out.set(c, o); o += c.length; } return out;
+}
 
 export async function encodeShare(obj) {
   const raw = new TextEncoder().encode(JSON.stringify(obj));
@@ -13,6 +18,7 @@ export async function encodeShare(obj) {
   return "z" + b64(await pipe(raw, new CompressionStream("deflate-raw")));
 }
 export async function decodeShare(s) {
+  if (typeof s !== "string" || s.length > 400000) throw new Error("Länken är för lång");
   const bytes = unb64(s.slice(1));
   const raw = s[0] === "z" ? await pipe(bytes, new DecompressionStream("deflate-raw")) : bytes;
   return JSON.parse(new TextDecoder().decode(raw));

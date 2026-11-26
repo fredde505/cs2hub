@@ -1,18 +1,18 @@
-import { $, esc, kr, dec, usd2sek, pct, cls, signKr, imgUrl, toast } from "../util.js";
+import { $, esc, kr, dec, usd2sek, pct, cls, signKr, imgUrl, toast, moneyFromNum, curSym } from "../util.js";
 import { D, MARKETS, lookup, bestUsd, lowestExternal, settings, saveSettings, DEFAULT_FEES } from "../data.js";
 import { pageHead, emptyState } from "./common.js";
 
 export function renderTools(root) {
   root.innerHTML = `${pageHead("Tools", "Kalkylatorer och analysverktyg.")}
   <div class="panel"><h2>Sell Calculator</h2><p class="muted small" style="margin-top:0">Se exakt vad du får ut efter marknadsavgifter – och vilket pris du ska lista för att få önskat nettobelopp. Avgifterna ändras ibland, så du kan justera dem själv; dina värden sparas i webbläsaren och används även för nettovärdena på resten av sidan.</p>
-    <div class="form" style="max-width:560px"><label>Försäljningspris (kr)<input class="inp" id="gross" type="number" min="0" step="0.01" placeholder="t.ex. 250"></label>
-    <label>Önskat nettobelopp (kr)<input class="inp" id="net" type="number" min="0" step="0.01" placeholder="t.ex. 200"></label></div>
+    <div class="form" style="max-width:560px"><label>Försäljningspris (${curSym()})<input class="inp" id="gross" type="number" min="0" step="0.01" placeholder="t.ex. 250"></label>
+    <label>Önskat nettobelopp (${curSym()})<input class="inp" id="net" type="number" min="0" step="0.01" placeholder="t.ex. 200"></label></div>
     <div class="scroll-x" style="margin-top:14px"><table class="tbl" id="sellTbl"><thead><tr><th>Marknad</th><th class="r">Avgift (%)</th><th class="r">Du får (netto)</th><th class="r">Lista för att få önskat netto</th><th>Vad pengarna blir</th></tr></thead><tbody></tbody></table></div>
     <div class="row" style="margin-top:12px"><label class="muted small">Steam-krediter räknas som <input class="inp" id="c2c" type="number" min="1" max="100" step="1" style="width:70px;display:inline-block"> % av riktiga pengar</label><button class="btn ghost sm" id="reset">Återställ standardavgifter</button></div>
     <div class="muted small" style="margin-top:8px"><b>Steam-plånbok ≠ riktiga pengar.</b> Pengar du får på Steam Market blir krediter som bara kan användas på Steam (spel, föremål). Externa marknadsplatser betalar ut riktiga pengar. Omräkningen ovan är en uppskattning av vad krediter är värda jämfört med riktiga pengar. Avgifterna är uppskattningar och varierar med belopp och betalmetod.</div></div>`;
   const pctIn = m => `<input class="inp" data-fee="${m.key}" type="number" min="0" max="50" step="0.1" value="${(m.fee * 100).toFixed(1)}" style="width:84px" aria-label="Avgift ${esc(m.name)}">`;
   const calc = () => {
-    const g = +$("#gross", root).value, n = +$("#net", root).value;
+    const g = moneyFromNum($("#gross", root).value) || 0, n = moneyFromNum($("#net", root).value) || 0; // visningsvalutan -> kronor
     $("#sellTbl tbody", root).innerHTML = MARKETS.map(m => `<tr><td>${m.name}</td><td class="r">${pctIn(m)}</td>
       <td class="r num">${g ? kr(g * (1 - m.fee)) : "–"}</td><td class="r num">${n ? kr(n / (1 - m.fee)) : "–"}</td>
       <td>${m.real ? "Riktiga pengar" : `<span class="muted">Steam-krediter${g ? ` (≈ ${kr(g * (1 - m.fee) * settings.creditToCash)} i riktiga pengar)` : ""}</span>`}</td></tr>`).join("");

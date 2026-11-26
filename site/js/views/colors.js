@@ -1,6 +1,10 @@
-import { $, $$, esc, imgUrl, kr, krUsd, usd2sek, dec, COLORS, COLOR_LABEL, WEARS, WEAR_LONG, debounce, MISSING } from "../util.js";
+import { moneyFromNum, curSym, $, $$, esc, imgUrl, kr, krUsd, usd2sek, dec, COLORS, COLOR_LABEL, WEARS, WEAR_LONG, debounce, MISSING } from "../util.js";
 import { D, bestUsd, mhnFor } from "../data.js";
 import { itemCard, pageHead, itemPicker, emptyState, priceNote } from "./common.js";
+import { getKV, setKV } from "../store.js";
+import { uid, toast } from "../util.js";
+import { colorScore } from "../sticker-core.js";
+import { cleanColorThemes } from "../combo-core.js";
 
 const F0 = () => ({ colors: new Set(), c2: "", multi: false, cover: 0, cat: "", wear: "", pmin: "", pmax: "", q: "", sort: "price", kind: "", hex: "", priced: false });
 const F = F0();
@@ -12,6 +16,7 @@ const PAGE = 60;
 const CHIP_COLORS = ["red", "orange", "gold", "green", "cyan", "blue", "purple", "pink", "brown", "black", "white", "gray"];
 
 function priceFor(e, wear = F.wear) {
+  if (!e.wr) return e.mh ? bestUsd(e.mh) : null; // stickers och charms har inget slitage
   if (wear) return e.wr.includes(wear) ? bestUsd(mhnFor(e, wear)) : null;
   const arr = (e.wr.length ? e.wr : [null]).map(w => bestUsd(mhnFor(e, w))).filter(Boolean);
   return arr.length ? Math.min(...arr) : null;
@@ -42,23 +47,25 @@ export function matchScore(a, b) {
   return Math.max(0, Math.min(100, s));
 }
 
-export function renderColors(root) {
+export async function renderColors(root) {
+  let themes = cleanColorThemes(await getKV("colorThemes", null)); // sparade färgteman (delas med Combo Finder)
   const cats = [...new Set(D.skins.map(s => s.c))].sort();
   const chip = (c, set) => `<button class="chip ${(set === "c1" ? F.colors.has(c) : F.c2 === c) ? "on" : ""}" data-set="${set}" data-c="${c}" aria-pressed="${set === "c1" ? F.colors.has(c) : F.c2 === c}"><i class="dot" style="background:${COLORS[c]}"></i>${COLOR_LABEL[c]}</button>`;
   root.innerHTML = `${pageHead("Color Explorer", "Alla skinbilder är färganalyserade i förväg. Välj en eller flera färger, bestäm hur stor del av vapnet som ska ha färgen, och kombinera med pris, slitage och vapentyp.")}
     <div class="panel" style="margin-bottom:14px"><div class="row" style="margin-bottom:10px;align-items:flex-start"><span class="muted small" style="width:96px">Färger (välj flera)</span><div class="chips">${CHIP_COLORS.map(c => chip(c, "c1")).join("")}<button class="chip ${F.multi ? "on" : ""}" id="multi" aria-pressed="${F.multi}">🌈 Multicolor</button></div></div>
+    <div class="row" style="margin-bottom:10px;align-items:flex-start"><span class="muted small" style="width:96px">Färgteman</span><div style="flex:1"><div class="chips" id="cthm"></div><div class="row" style="margin-top:6px;gap:6px"><input class="inp" id="thname" placeholder="Namn på färgtema" style="max-width:200px" aria-label="Namn på färgtema"><button class="btn ghost sm" id="thsave">Spara valda färger som tema</button></div></div></div>
     <div class="row" style="margin-bottom:10px;align-items:flex-start"><span class="muted small" style="width:96px">Sekundär</span><div class="chips">${CHIP_COLORS.map(c => chip(c, "c2")).join("")}</div></div>
     <div class="row" style="margin-bottom:10px"><span class="muted small" style="width:96px">Täckning</span><input type="range" id="cover" min="0" max="60" step="5" value="${F.cover}" style="width:220px;max-width:100%" aria-label="Minsta täckning"><span class="small" id="coverTxt"></span></div>
     <div class="row" style="flex-wrap:wrap"><span class="muted small" style="width:96px">Exakt färg</span><input type="color" id="hexpick" value="${esc(F.hex || "#c0392b")}" style="width:44px;height:32px;padding:0;border:1px solid var(--line2);border-radius:6px;background:none;cursor:pointer" aria-label="Välj exakt färg"><button class="btn sm" id="hexgo">Hitta närmast</button><button class="btn ghost sm" id="hexoff" ${F.hex ? "" : "hidden"}>Ta bort</button><span class="muted small" id="hexTxt"></span></div></div>
     <div class="toolbar"><input class="inp" id="q" placeholder="Sök…" value="${esc(F.q)}" aria-label="Sök"><select class="inp" id="cat" aria-label="Vapentyp"><option value="">Alla vapentyper</option>${cats.map(c => `<option ${c === F.cat ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>
-    <select class="inp" id="kind" aria-label="Typ"><option value="">Alla typer</option><option value="weapon" ${F.kind === "weapon" ? "selected" : ""}>Vapen</option><option value="knife" ${F.kind === "knife" ? "selected" : ""}>Knivar</option><option value="glove" ${F.kind === "glove" ? "selected" : ""}>Handskar</option></select>
+    <select class="inp" id="kind" aria-label="Typ"><option value="">Alla typer</option><option value="weapon" ${F.kind === "weapon" ? "selected" : ""}>Vapen</option><option value="knife" ${F.kind === "knife" ? "selected" : ""}>Knivar</option><option value="glove" ${F.kind === "glove" ? "selected" : ""}>Handskar</option><option value="sticker" ${F.kind === "sticker" ? "selected" : ""}>Stickers</option><option value="charm" ${F.kind === "charm" ? "selected" : ""}>Charms</option></select>
     <select class="inp" id="wear" aria-label="Slitage"><option value="">Alla slitage</option>${WEARS.map(w => `<option value="${w}" ${w === F.wear ? "selected" : ""}>${WEAR_LONG[w]}</option>`).join("")}</select>
-    <input class="inp" id="pmin" type="number" placeholder="Min kr" style="width:92px" value="${esc(F.pmin)}"><input class="inp" id="pmax" type="number" placeholder="Budget max kr" style="width:120px" value="${esc(F.pmax)}">
+    <input class="inp" id="pmin" type="number" placeholder="Min ${curSym()}" style="width:92px" value="${esc(F.pmin)}"><input class="inp" id="pmax" type="number" placeholder="Budget max ${curSym()}" style="width:120px" value="${esc(F.pmax)}">
     <select class="inp" id="sort" aria-label="Sortera"><option value="price" ${F.sort === "price" ? "selected" : ""}>Dyrast först</option><option value="cheap" ${F.sort === "cheap" ? "selected" : ""}>Billigast först</option><option value="cover" ${F.sort === "cover" ? "selected" : ""}>Mest av vald färg</option><option value="near" ${F.sort === "near" ? "selected" : ""}>Närmast exakt färg</option></select>
     <label class="chip ${F.priced ? "on" : ""}" style="cursor:pointer"><input type="checkbox" id="priced" ${F.priced ? "checked" : ""} style="margin:0"> Bara med pris</label>
     <button class="btn ghost sm" id="reset">Rensa</button></div>
     <div class="panel" style="margin-bottom:14px"><h2>Match My Skin</h2><p class="muted small" style="margin-top:0">Välj en kniv, ett par handskar eller ett vapenskin – så hittar sidan skins i samma färger, sorterade efter hur väl de matchar.</p>
-      <div class="row" style="align-items:flex-start"><div id="mm" style="flex:1;min-width:220px"></div><input class="inp" id="mmb" type="number" min="0" placeholder="Budget per föremål (kr)" style="width:200px" aria-label="Budget per föremål"></div><div id="mmOut"></div></div>
+      <div class="row" style="align-items:flex-start"><div id="mm" style="flex:1;min-width:220px"></div><input class="inp" id="mmb" type="number" min="0" placeholder="Budget per föremål (${curSym()})" style="width:200px" aria-label="Budget per föremål"></div><div id="mmOut"></div></div>
     <div class="muted small" id="count" style="margin-bottom:10px" role="status"></div><div class="cards" id="grid"></div><button class="btn ghost more" id="more" hidden>Visa fler</button>
     <p class="muted small" style="margin-top:14px">Färgerna är beräknade från skinbilderna (andel av vapnets pixlar) – en uppskattning, inte en exakt färgtabell. ${esc(priceNote())}</p>`;
   let shown = PAGE, list = [];
@@ -79,22 +86,36 @@ export function renderColors(root) {
   $("#hexoff", root).addEventListener("click", () => { F.hex = ""; if (F.sort === "near") { F.sort = "price"; $("#sort", root).value = "price"; } hexTxt(); draw(); });
   $("#reset", root).addEventListener("click", () => { Object.assign(F, F0()); renderColors(root); });
   $("#more", root).addEventListener("click", () => { shown += PAGE; paint(); });
+  // Sparade färgteman: klick väljer färgerna, spara-knappen sparar de valda (1–3 färger)
+  const paintThemes = () => {
+    const host = $("#cthm", root), cur = [...F.colors].sort().join();
+    host.innerHTML = themes.length ? themes.map((t, i) => `<span class="chip ${[...t.colors].sort().join() === cur ? "on" : ""}"><a href="#" data-th="${i}" style="text-decoration:none">${esc(t.name)}</a> ${t.colors.map(c => `<i class="dot" style="background:${COLORS[c]}"></i>`).join("")} <button class="linkbtn" data-thd="${i}" aria-label="Ta bort ${esc(t.name)}">✕</button></span>`).join("") : `<span class="muted small">Inga sparade teman än – välj 1–3 färger och spara dem som ett tema.</span>`;
+    host.querySelectorAll("[data-th]").forEach(a => a.addEventListener("click", e => { e.preventDefault(); F.colors = new Set(themes[+a.dataset.th].colors); $$(".chip[data-set=c1]", root).forEach(x => x.classList.toggle("on", F.colors.has(x.dataset.c))); paintThemes(); draw(); }));
+    host.querySelectorAll("[data-thd]").forEach(b => b.addEventListener("click", async () => { themes.splice(+b.dataset.thd, 1); await setKV("colorThemes", themes); paintThemes(); }));
+  };
+  $("#thsave", root).addEventListener("click", async () => {
+    if (!F.colors.size || F.colors.size > 3) return toast("Välj 1–3 färger att spara som tema.");
+    const cols = [...F.colors], name = ($("#thname", root).value.trim() || cols.map(c => COLOR_LABEL[c]).join(" + ")).slice(0, 60);
+    themes = cleanColorThemes([{ id: uid(), name, colors: cols }, ...themes]); await setKV("colorThemes", themes); $("#thname", root).value = ""; toast("Färgtemat sparat"); paintThemes();
+  });
+  paintThemes();
 
   function draw() {
     shown = PAGE;
     const q = F.q.toLowerCase().split(/\s+/).filter(Boolean);
-    const pmin = F.pmin !== "" ? +F.pmin / usd2sek(1) : null, pmax = F.pmax !== "" ? +F.pmax / usd2sek(1) : null;
+    const pmin = F.pmin !== "" ? (moneyFromNum(F.pmin) ?? 0) / usd2sek(1) : null, pmax = F.pmax !== "" ? (moneyFromNum(F.pmax) ?? 0) / usd2sek(1) : null;
     list = [];
-    for (const s of D.skins) {
+    const src = F.kind === "sticker" ? D.stickers : F.kind === "charm" ? D.other.filter(o => o.ty === "charm") : D.skins; // stickers och charms har egen färgdata
+    for (const s of src) {
       if (F.colors.size && !F.colors.has(s.c1) && !(s.c2 && F.colors.has(s.c2))) continue;
       if (F.c2 && s.c2 !== F.c2) continue;
       if (F.multi && !s.mc) continue;
       if (F.cover && F.colors.size && coverage(s, F.colors) < F.cover) continue;
-      if (F.cat && s.c !== F.cat) continue;
-      if (F.kind && s.k !== F.kind) continue;
+      if (s.wr && F.cat && s.c !== F.cat) continue;
+      if (F.kind && s.wr && s.k !== F.kind) continue;
       if (q.length && !q.every(t => (s.n + " " + (s.ph || "")).toLowerCase().includes(t))) continue;
       const p = priceFor(s);
-      if ((F.wear || F.priced) && p == null) continue;
+      if (((F.wear && s.wr) || F.priced) && p == null) continue;
       if ((pmin != null || pmax != null) && (p == null || (pmin != null && p < pmin) || (pmax != null && p > pmax))) continue;
       list.push([s, p, F.colors.size ? coverage(s, F.colors) : 0, F.hex ? hexSim(F.hex, s.hx) : 0]);
     }
@@ -102,7 +123,7 @@ export function renderColors(root) {
     paint();
   }
   function paint() {
-    $("#count", root).textContent = `${list.length.toLocaleString("sv-SE")} skins`;
+    $("#count", root).textContent = `${list.length.toLocaleString("sv-SE")} ${F.kind === "sticker" ? "stickers" : F.kind === "charm" ? "charms" : "skins"}`;
     const g = $("#grid", root);
     g.innerHTML = list.length ? list.slice(0, shown).map(([s, p, cv, sim]) => itemCard(s, { price: p, extra: `<div class="small faint" style="margin-top:3px">${esc(COLOR_LABEL[s.c1] || "")}${s.p1 ? " " + s.p1 + " %" : ""}${s.c2 ? " + " + esc(COLOR_LABEL[s.c2]) + (s.p2 ? " " + s.p2 + " %" : "") : ""}${s.mc ? " · multi" : ""}${F.colors.size && F.sort === "cover" ? ` · täckning ${cv} %` : ""}${F.hex ? ` · <b>${Math.round(sim)} %</b> lik` : ""}</div>${colorBar(s)}` })).join("") : emptyState("Inga skins matchar", "Prova färre filter eller en lägre täckning.");
     $("#more", root).hidden = shown >= list.length;
@@ -114,15 +135,20 @@ export function renderColors(root) {
 }
 
 function matchOut(root, base) {
-  const out = $("#mmOut", root), budget = $("#mmb", root).value !== "" ? +$("#mmb", root).value / usd2sek(1) : null;
+  const out = $("#mmOut", root), budget = $("#mmb", root).value !== "" ? (moneyFromNum($("#mmb", root).value) ?? 0) / usd2sek(1) : null;
   const run = () => {
     const group = (title, pred) => {
       const l = D.skins.filter(s => s.id !== base.id && s.c1 && pred(s)).map(s => ({ s, m: matchScore(base, s), p: priceFor(s, "") })).filter(x => x.m >= 45 && (budget == null || (x.p != null && x.p <= budget)))
         .sort((a, b) => b.m - a.m || (b.p ?? 1e12) - (a.p ?? 1e12)).slice(0, 8);
       return l.length ? `<h2 style="margin:16px 0 8px">${title}</h2><div class="cards">${l.map(x => itemCard(x.s, { price: x.p, extra: `<div class="small" style="margin-top:3px"><b>${Math.round(x.m)} %</b> <span class="muted">färgmatchning</span></div>` })).join("")}</div>` : "";
     };
+    const theme = [base.c1, base.c2].filter(Boolean);
+    const other = (title, src) => { // stickers/charms har bara färgnamn och täckning (ingen hex), så matchningen bygger på dem
+      const l = src.filter(s => s.c1).map(s => ({ s, m: colorScore(s, theme), p: s.mh ? bestUsd(s.mh) : null })).filter(x => x.m != null && x.m >= 60 && (budget == null || (x.p != null && x.p <= budget))).sort((a, b) => b.m - a.m || (b.p ?? 1e12) - (a.p ?? 1e12)).slice(0, 8);
+      return l.length ? `<h2 style="margin:16px 0 8px">${title}</h2><div class="cards">${l.map(x => itemCard(x.s, { price: x.p, extra: `<div class="small" style="margin-top:3px"><b>${Math.round(x.m)} %</b> <span class="muted">färgmatchning</span></div>` })).join("")}</div>` : "";
+    };
     out.innerHTML = `<div class="row" style="margin-top:14px"><img src="${esc(imgUrl(base.img, "128fx96f"))}" style="width:84px" alt=""><div><b>${esc(base.n + (base.ph ? " · " + base.ph : ""))}</b><div class="muted small"><i class="dot" style="background:${esc(base.hx)}"></i> ${esc(COLOR_LABEL[base.c1] || "")}${base.p1 ? " " + base.p1 + " %" : ""}${base.c2 ? " + " + esc(COLOR_LABEL[base.c2]) : ""}</div></div></div>
-      ${group("Matchande knivar", s => s.k === "knife")}${group("Matchande handskar", s => s.k === "glove")}${group("Matchande vapenskins", s => s.k === "weapon")}`;
+      ${group("Matchande knivar", s => s.k === "knife")}${group("Matchande handskar", s => s.k === "glove")}${group("Matchande vapenskins", s => s.k === "weapon")}${other("Matchande stickers", D.stickers)}${other("Matchande charms", D.other.filter(o => o.ty === "charm"))}`;
     if (!out.querySelector(".cards")) out.insertAdjacentHTML("beforeend", emptyState("Inga bra matchningar", "Prova en högre budget eller ett annat skin."));
   };
   $("#mmb", root).onchange = () => matchOut(root, base);

@@ -48,10 +48,8 @@ export function checkPriceAge() {
 }
 
 /* ---- Påminnelse om backup: datan finns bara i den här webbläsaren ---- */
-export async function backupNow() {
-  download("cs2hub-backup.json", JSON.stringify(await exportAll()));
-  await setKV("lastBackup", Date.now());
-}
+export { backupNow } from "./views/backup-ui.js";
+import { backupNow } from "./views/backup-ui.js";
 export async function checkBackupReminder() {
   const now = Date.now();
   let first = await getKV("firstSeen", 0); if (!first) { first = now; await setKV("firstSeen", now); }

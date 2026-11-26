@@ -1,4 +1,4 @@
-import { $, $$, esc, imgUrl, kr, krm, dec, usd2sek, modal, toast, uid, WEARS, WEAR_LONG, COLORS, COLOR_LABEL, debounce, confirmBox, copyText, MISSING } from "../util.js";
+import { moneyFromNum, curSym, toDisp, $, $$, esc, imgUrl, kr, krm, dec, usd2sek, modal, toast, uid, WEARS, WEAR_LONG, COLORS, COLOR_LABEL, debounce, confirmBox, copyText, MISSING } from "../util.js";
 import { all, put, del } from "../store.js";
 import { D, mhnFor, bestUsd, priceInfo, priceTip } from "../data.js";
 import { pageHead, dispName, emptyState, priceNote } from "./common.js";
@@ -100,7 +100,7 @@ function draw() {
       <div class="panel"><h2>Budget Loadout Challenge</h2>
         <p class="muted small" style="margin-top:0">Fyll loadouten automatiskt med så fina skins i vald färg som budgeten räcker till – så komplett som möjligt.</p>
         <div class="form"><label>Färg<select class="inp" id="bc">${Object.keys(COLORS).filter(k => !["black", "white", "gray", "brown"].includes(k)).map(k => `<option value="${k}" ${k === (cur.theme || "blue") ? "selected" : ""}>${COLOR_LABEL[k]}</option>`).join("")}</select></label>
-        <label>Budget (kr)<input class="inp" id="bb" type="number" min="100" value="2000"></label>
+        <label>Budget (${curSym()})<input class="inp" id="bb" type="number" min="${Math.round(toDisp(100))}" value="${Math.round(toDisp(2000))}"></label>
         <label class="full" style="grid-auto-flow:column;justify-content:start;align-items:center;gap:8px"><input type="checkbox" id="bo"> Räkna mina ägda skins som gratis</label></div>
         <button class="btn" id="go" style="margin-top:12px">Skapa loadout</button><div class="muted small" id="goRes" style="margin-top:8px" role="status"></div></div>
     </div></div>
@@ -121,7 +121,7 @@ function draw() {
   $("#theme", root).addEventListener("change", e => { cur.theme = e.target.value; draw(); });
   $("#list", root).addEventListener("click", () => shopList(c));
   $("#cmp", root).addEventListener("click", () => compare(c));
-  $("#go", root).addEventListener("click", () => challenge($("#bc", root).value, +$("#bb", root).value || 2000, $("#bo", root).checked));
+  $("#go", root).addEventListener("click", () => challenge($("#bc", root).value, (moneyFromNum($("#bb", root).value) || 2000), /* kronor */ $("#bo", root).checked));
   $$("[data-pick]", root).forEach(b => b.addEventListener("click", () => pick(b.dataset.pick)));
   $$("[data-wear]", root).forEach(s => s.addEventListener("change", () => { cur.slots[s.dataset.wear].wear = s.value; draw(); }));
   $$("[data-st]", root).forEach(s => s.addEventListener("change", () => { cur.slots[s.dataset.st].st = s.checked; draw(); }));
@@ -152,7 +152,7 @@ function pick(slot) {
     <div class="toolbar" style="margin-top:10px"><input class="inp" id="q" placeholder="Sök…" style="flex:1;min-width:140px" aria-label="Sök skin">
       <select class="inp" id="own" aria-label="Äger"><option value="all">Alla</option><option value="own">Bara jag äger</option><option value="miss">Bara jag saknar</option></select>
       <select class="inp" id="th" aria-label="Färg"><option value="">Alla färger</option>${Object.keys(COLORS).map(k => `<option value="${k}" ${k === theme ? "selected" : ""}>${COLOR_LABEL[k]}</option>`).join("")}</select>
-      <input class="inp" id="mx" type="number" min="0" placeholder="Max kr" style="width:90px" aria-label="Högsta pris">
+      <input class="inp" id="mx" type="number" min="0" placeholder="Max ${curSym()}" style="width:90px" aria-label="Högsta pris">
       <select class="inp" id="so" aria-label="Sortera"><option value="pa">Pris ↑</option><option value="pd">Pris ↓</option><option value="n">Namn</option></select></div>
     <div class="muted small" id="cnt" style="margin-bottom:8px"></div><div class="cards compact" id="g"></div>`, {
     wide: true,
@@ -162,7 +162,7 @@ function pick(slot) {
         q = $("#q", m).value.toLowerCase(); own = $("#own", m).value; theme = $("#th", m).value; sort = $("#so", m).value; max = $("#mx", m).value;
         const t = q.split(/\s+/).filter(Boolean);
         let l = pool.map(e => { const w = e.wr ? defWear(e) : null, mhn = e.wr ? mhnFor(e, w) : e.mh, info = priceInfo(mhn); return { e, w, mhn, p: info ? usd2sek(info.usd) : null, has: ownedSkin.has(e.id) }; })
-          .filter(x => t.every(s => (x.e.n + " " + (x.e.ph || "")).toLowerCase().includes(s)) && (own === "all" || (own === "own") === x.has) && (!theme || x.e.c1 === theme || x.e.c2 === theme) && (max === "" || (x.p != null && x.p <= +max)));
+          .filter(x => t.every(s => (x.e.n + " " + (x.e.ph || "")).toLowerCase().includes(s)) && (own === "all" || (own === "own") === x.has) && (!theme || x.e.c1 === theme || x.e.c2 === theme) && (max === "" || (x.p != null && x.p <= (moneyFromNum(max) ?? 1e12))));
         const big = sort === "pa" ? 1e12 : -1;
         l.sort((a, b) => sort === "n" ? a.e.n.localeCompare(b.e.n) : (sort === "pa" ? 1 : -1) * ((a.p ?? big) - (b.p ?? big)));
         $("#cnt", m).textContent = `${l.length} träffar${l.length > 80 ? " (visar 80)" : ""}`;
@@ -236,7 +236,7 @@ function challenge(color, budget, ownedFree) {
     if (up) { slots[k] = { id: up.s.id, wear: up.w }; left -= up.p - curP; spent += up.p - curP; }
   }
   const filled = Object.keys(slots).length;
-  cur.slots = slots; cur.theme = color; cur.name = `${COLOR_LABEL[color]} under ${Math.round(budget)} kr`;
+  cur.slots = slots; cur.theme = color; cur.name = `${COLOR_LABEL[color]} under ${kr(budget)}`;
   draw();
   const res = $("#goRes", root); if (res) res.textContent = `${filled} av ${keys.length} platser fyllda för ${kr(spent)} (${kr(Math.max(0, left))} kvar). ${filled < keys.length ? "Resten hade inget " + COLOR_LABEL[color].toLowerCase() + " skin inom budgeten." : "Komplett!"}`;
   toast(`${filled}/${keys.length} platser – ${kr(spent)} av ${kr(budget)}`);

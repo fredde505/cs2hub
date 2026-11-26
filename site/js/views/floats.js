@@ -7,16 +7,19 @@ import { pageHead, itemPicker } from "./common.js";
 const pLow = (s, f) => Math.min(1, Math.max(0, (f - s.f[0]) / ((s.f[1] - s.f[0]) || 1)));
 const odds = p => p <= 0 ? "unikt bästa" : p >= 0.5 ? `${dec(p * 100, 0)} %` : "1 på " + Math.round(1 / p).toLocaleString("sv-SE");
 const pctTxt = p => dec(p * 100, p < 0.01 ? 3 : 1) + " %";
-const S = { id: null, f: "" };
+const S = { id: null, f: "" }, FLOAT_PAGE = 100;
 
 export async function renderFloats(root) {
   const items = (await all("items")).filter(i => i.float != null);
   root.innerHTML = `${pageHead("Float Ranking", "Hur bra är din float? Se sannolikheter, slitagefördelning och en rankning av dina egna floats.")}
   <div class="panel" style="margin-bottom:14px"><h2>Float Checker</h2><div id="pk"></div><div id="chk" style="margin-top:12px"></div></div>
-  <div class="panel"><h2>Mina bästa floats</h2>${mine(items)}</div>
+  <div class="panel"><h2>Mina bästa floats</h2><div id="mine">${mine(items, FLOAT_PAGE)}</div></div>
   <p class="muted small" style="margin-top:12px">Rankningen utgår från att floats vid drop fördelas jämnt över skinets intervall. En riktig global rankning bland alla existerande skins kräver en floatdatabas från marknadsplatser som CSFloat, vilken inte går att läsa fritt från webbläsaren.</p>`;
   itemPicker($("#pk", root), s => { if (!s.f) return $("#chk", root).innerHTML = `<div class="muted">${esc(s.n)} har ingen float (vanilla-kniv).</div>`; S.id = s.id; S.f = ((s.f[0] + s.f[1]) / 2).toFixed(4); check(root); }, { kinds: ["weapon", "knife", "glove"], placeholder: "Sök skin (t.ex. AK-47 Redline)…" });
   if (S.id) check(root);
+  /* Rankningen ritas i omgångar (en stor samling gav tusentals rader och trög sida) */
+  let shown = FLOAT_PAGE;
+  root.addEventListener("click", ev => { if (!ev.target.closest("#moreF")) return; shown += FLOAT_PAGE; $("#mine", root).innerHTML = mine(items, shown); });
 }
 
 function check(root) {
@@ -33,13 +36,13 @@ function check(root) {
   $("#ff", host).addEventListener("input", e => { S.f = e.target.value; clearTimeout(check.t); check.t = setTimeout(() => check(root), 350); });
 }
 
-function mine(items) {
+function mine(items, limit = 100) {
   const rows = items.map(i => { const e = lookup(i.mhn)?.e; return e?.f ? { i, e, p: pLow(e, i.float) } : null; }).filter(Boolean);
   if (!rows.length) return `<div class="empty small">Inga föremål med float i ditt inventory. Lägg till float via Redigera, eller via Inspect &amp; Float.</div>`;
   const group = {}; rows.forEach(r => (group[r.e.id] ||= []).push(r));
   Object.values(group).forEach(g => g.sort((a, b) => a.i.float - b.i.float).forEach((r, k) => r.rank = k + 1));
   rows.forEach(r => { r.best = Math.min(r.p, 1 - r.p); r.dir = r.p <= 0.5 ? "Låg" : "Hög"; });
   rows.sort((a, b) => a.best - b.best);
-  return `<div class="scroll-x"><table class="tbl"><thead><tr><th>Föremål</th><th class="r">Float</th><th>Slitage</th><th class="r">Placering</th><th class="r hide-m">Egen rank</th></tr></thead><tbody>${rows.map(r => `<tr><td><div class="nm"><span class="rar" style="--rc:${esc(r.e.rc)}"></span><img loading="lazy" src="${esc(imgUrl(r.e.img, "96fx72f"))}" alt=""><a class="n2" href="#/item/${esc(r.e.id)}">${esc(r.i.mhn)}</a></div></td>
-    <td class="r num">${dec(r.i.float, 5)}</td><td>${wearFromFloat(r.i.float)}</td><td class="r num">${r.dir} float · topp ${pctTxt(r.best)}<div class="muted small">${odds(r.best)}</div></td><td class="r num hide-m">${r.rank}/${group[r.e.id].length}</td></tr>`).join("")}</tbody></table></div>`;
+  return `<div class="scroll-x"><table class="tbl"><thead><tr><th>Föremål</th><th class="r">Float</th><th>Slitage</th><th class="r">Placering</th><th class="r hide-m">Egen rank</th></tr></thead><tbody>${rows.slice(0, limit).map(r => `<tr><td><div class="nm"><span class="rar" style="--rc:${esc(r.e.rc)}"></span><img loading="lazy" src="${esc(imgUrl(r.e.img, "96fx72f"))}" alt=""><a class="n2" href="#/item/${esc(r.e.id)}">${esc(r.i.mhn)}</a></div></td>
+    <td class="r num">${dec(r.i.float, 5)}</td><td>${wearFromFloat(r.i.float)}</td><td class="r num">${r.dir} float · topp ${pctTxt(r.best)}<div class="muted small">${odds(r.best)}</div></td><td class="r num hide-m">${r.rank}/${group[r.e.id].length}</td></tr>`).join("")}</tbody></table></div>${rows.length > limit ? `<div class="row" style="justify-content:center;margin-top:10px"><span class="muted small">Visar ${limit} av ${rows.length}</span><button class="btn ghost" id="moreF">Visa fler</button></div>` : ""}`;
 }

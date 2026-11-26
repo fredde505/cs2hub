@@ -1,7 +1,8 @@
-import { $, esc, imgUrl, kr, usd2sek, pct, cls, parseDec } from "../util.js";
+import { $, esc, imgUrl, kr, usd2sek, pct, cls, parseMoney, inputMoney, curSym } from "../util.js";
 import { D, MARKETS, lookup, loadHistory, historyFor, historyNames, historyDays, lowestExternalSrc, marketUrl, priceInfo } from "../data.js";
 import { loadState, buildRows } from "../finance.js";
 import { pageHead, emptyState } from "./common.js";
+import { getPrefs } from "../prefs.js";
 
 /** Dagens fynd: föremål som är ovanligt billiga jämfört med (A) vår egen prishistorik, (B) andra marknader och (C) vad du själv betalat. */
 const P = { min: "30", kind: "" };
@@ -10,8 +11,9 @@ const median = a => { const s = [...a].sort((x, y) => x - y), m = s.length >> 1;
 const skip = mhn => mhn.startsWith("Souvenir") || /Doppler|Marble Fade|Case Hardened|Fade/.test(mhn); // pris beror på fas/mönster → jämförelsen är missvisande
 
 export async function renderDeals(root) {
+  if (!P._init) { P._init = true; const m = getPrefs().minKr; P.min = inputMoney(m != null ? m : 30, m != null ? 2 : 0); /* standard 30 kr, omräknat till visningsvalutan */ } // standard lägsta pris från Inställningar
   root.innerHTML = `${pageHead("Dagens fynd", "Föremål som är ovanligt billiga just nu – jämfört med prishistoriken, med andra marknader och med vad du själv betalat.")}
-    <div class="toolbar"><label class="muted small">Lägsta pris (kr) <input class="inp" id="dmin" type="text" inputmode="decimal" value="${esc(P.min)}" style="width:90px"></label>
+    <div class="toolbar"><label class="muted small">Lägsta pris (${curSym()}) <input class="inp" id="dmin" type="text" inputmode="decimal" value="${esc(P.min)}" style="width:90px"></label>
     <select class="inp" id="dkind" aria-label="Typ"><option value="">Alla typer</option><option value="weapon">Vapen</option><option value="knife">Knivar</option><option value="glove">Handskar</option></select></div>
     <div id="dout"><div class="muted small" style="padding:10px 0">Letar efter fynd…</div></div>
     <p class="muted small" style="margin-top:14px">Priserna är utropspriser (listningar), inte genomförda försäljningar – kontrollera alltid listningen innan du köper. Ett lågt pris kan bero på dåligt float, fel variant eller att någon prissatt fel. Föremål där pris beror på fas eller mönster (Doppler, Fade, Case Hardened, Marble Fade) och Souvenir jämförs inte.</p>`;
@@ -32,7 +34,7 @@ function row(d) {
 const table = list => `<div class="panel scroll-x" style="padding:0;margin-bottom:18px"><table class="tbl"><thead><tr><th>Föremål</th><th class="r">Pris nu</th><th class="r hide-m">Jämförpris</th><th class="r">Billigare</th></tr></thead><tbody>${list.map(row).join("")}</tbody></table></div>`;
 
 async function paint(root) {
-  const out = $("#dout", root), minUsd = (parseDec(P.min) || 0) / usd2sek(1);
+  const out = $("#dout", root), minUsd = (parseMoney(P.min) || 0) / usd2sek(1);
   // Stickers, charms m.m. har få försäljningar och orimliga prisskillnader mellan marknaderna → tas inte med i fynd
   const kindOk = mhn => { const k = lookup(mhn)?.e?.kind; return P.kind ? k === P.kind : ["weapon", "knife", "glove", "case"].includes(k); };
   const ok = (mhn, now) => !skip(mhn) && D.mhn.has(mhn) && now >= Math.max(minUsd, 0.5) && kindOk(mhn);

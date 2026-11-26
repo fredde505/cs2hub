@@ -1,11 +1,23 @@
-import { $, esc, imgUrl, krUsd, usd2sek, kr, krm, dec, MISSING, WEARS, WEAR_LONG, WEAR_RANGE, COLORS, COLOR_LABEL, rarityOrder, debounce, lineChart, pct, cls, fmtDate, fmtDateTime, ago } from "../util.js";
-import { loadHistory, historyFor, historyDays, D, MARKETS, fromPrice, mhnFor, priceRow, pricesByWear, bestUsd, steamUsd, cashUsd, marketUrl, priceInfo, priceTip } from "../data.js";
+import { moneyFromNum, curSym, $, esc, imgUrl, krUsd, usd2sek, kr, krm, dec, MISSING, WEARS, WEAR_LONG, WEAR_RANGE, COLORS, COLOR_LABEL, rarityOrder, debounce, searchTerms, lineChart, pct, cls, fmtDate, fmtDateTime, ago } from "../util.js";
+import { lookup, loadHistory, historyFor, historyDays, D, MARKETS, fromPrice, mhnFor, priceRow, pricesByWear, bestUsd, steamUsd, cashUsd, marketUrl, priceInfo, priceTip } from "../data.js";
 import { itemCard, pageHead, KINDS, KIND_LABEL, priceNote, emptyState } from "./common.js";
 import { addItemModal } from "./inventory.js";
 import { addWatch } from "./watchlist.js";
 import { addToCompare } from "./compare.js";
 import { presetColors } from "./colors.js";
 import { parseQuery } from "../search.js";
+import { analysePrice } from "../pricing.js";
+
+/** Pristillförlitlighet för ett marknadsnamn: nivå, antal marknader och orsaker (bygger bara på antal marknader, prisspridning och datans ålder). */
+function statusBlock(mhn, wearNote = "") {
+  if (!mhn) return "";
+  const a = analysePrice(D.P.p[mhn] || null, { ageMs: D.priceAge ? Date.now() - D.priceAge : 0, mhn });
+  const col = { ok: "#7ec699", warn: "#d9b36a", bad: "#e8857a", miss: "#d9b36a" }[a.tone];
+  const spread = a.spread && a.markets.length > 1 ? ` · högsta/lägsta ${dec(a.spread, 2)}×` : "";
+  return `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)"><span class="chip" style="border-color:${col};color:${col}">${esc(a.label)}</span> <span class="muted small">${a.markets.length} marknad${a.markets.length === 1 ? "" : "er"} med pris${spread}${wearNote ? " · avser " + esc(wearNote) : ""}</span>
+    <ul class="muted small" style="margin:6px 0 0;padding-left:18px;line-height:1.6">${a.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>
+    <div class="faint small" style="margin-top:4px">Alla marknader hämtades samtidigt; prisleverantören anger ingen egen tidpunkt per marknad.</div></div>`;
+}
 
 const PAGE = 60;
 const F = { kind: "weapon", q: "", weapon: "", rarity: "", tour: "", pmin: "", pmax: "", st: false, sv: false, priced: "", sort: "name" };
@@ -55,7 +67,7 @@ export function renderList(root, params = {}) {
   } else {
     fl.innerHTML = `<input class="inp" id="fq" placeholder="Sök namn…" value="${esc(F.q)}">
       ${weapons.length > 1 ? sel("fw", "Alla vapen", weapons, F.weapon) : ""}${rarities.length > 1 ? sel("fr", "Alla rarities", rarities, F.rarity) : ""}${tours.length ? sel("ft", "Alla turneringar", tours, F.tour) : ""}
-      <input class="inp" id="fpmin" type="number" min="0" placeholder="Min kr" style="width:92px" value="${esc(F.pmin)}"><input class="inp" id="fpmax" type="number" min="0" placeholder="Max kr" style="width:92px" value="${esc(F.pmax)}">
+      <input class="inp" id="fpmin" type="number" min="0" placeholder="Min ${curSym()}" style="width:92px" value="${esc(F.pmin)}"><input class="inp" id="fpmax" type="number" min="0" placeholder="Max ${curSym()}" style="width:92px" value="${esc(F.pmax)}">
       ${["weapon", "knife", "glove"].includes(F.kind) ? `<label class="chip ${F.st ? "on" : ""}" id="fst">StatTrak™</label>` : ""}${F.kind === "weapon" ? `<label class="chip ${F.sv ? "on" : ""}" id="fsv">Souvenir</label>` : ""}
       <select class="inp" id="fpr" aria-label="Prisstatus"><option value="">Alla (med och utan pris)</option><option value="has" ${F.priced === "has" ? "selected" : ""}>Har prisdata</option><option value="none" ${F.priced === "none" ? "selected" : ""}>Saknar prisdata</option></select>
       <select class="inp" id="fs" aria-label="Sortera">${[["name", "Namn A–Ö"], ["pa", "Billigast först"], ["pd", "Dyrast först"], ["rar", "Rarity (högst först)"]].map(([v, l]) => `<option value="${v}" ${F.sort === v ? "selected" : ""}>${l}</option>`).join("")}</select>`;
@@ -68,8 +80,8 @@ export function renderList(root, params = {}) {
   let shown = PAGE, list = [];
   function draw() {
     shown = PAGE;
-    const q = F.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    const pmin = F.pmin !== "" ? +F.pmin / usd2sek(1) : null, pmax = F.pmax !== "" ? +F.pmax / usd2sek(1) : null;
+    const q = searchTerms(F.q);
+    const pmin = F.pmin !== "" ? (moneyFromNum(F.pmin) ?? 0) / usd2sek(1) : null, pmax = F.pmax !== "" ? (moneyFromNum(F.pmax) ?? 0) / usd2sek(1) : null;
     list = items.filter(e => {
       if (q.length) { const s = (e.n + " " + (e.w || "") + " " + (e.tn || "")).toLowerCase(); if (!q.every(t => s.includes(t))) return false; }
       if (F.weapon && e.w !== F.weapon) return false;
@@ -88,8 +100,9 @@ export function renderList(root, params = {}) {
     paint();
   }
   function paint() {
-    $("#count", root).textContent = `${list.length.toLocaleString("sv-SE")} föremål`;
-    const g = $("#grid", root);
+    const cnt = $("#count", root), g = $("#grid", root);
+    if (!cnt || !g) return; /* sidan har hunnit bytas (debounce efter navigering) */
+    cnt.textContent = `${list.length.toLocaleString("sv-SE")} föremål`;
     g.innerHTML = list.length ? list.slice(0, shown).map(e => F.kind === "collection" ? collectionCard(e) : itemCard(e)).join("") : `<div style="grid-column:1/-1">${emptyState("Inga föremål matchar", "Prova att ta bort något filter eller söka på något annat.")}</div>`;
     $("#more", root).hidden = shown >= list.length;
   }
@@ -130,7 +143,9 @@ export function renderItem(root, id) {
   root.innerHTML = `${back}<div style="height:10px"></div>${head}<hr>${body}`;
   $("#addInv", root).addEventListener("click", () => addItemModal({ entry: e }));
   $("#addCmp", root).addEventListener("click", () => addToCompare(e.id));
-  $("#addWatch", root).addEventListener("click", () => addWatch(isSkin ? mhnFor(e, e.wr[2] || e.wr[0] || null) : e.mh));
+  const watchBtn = $("#addWatch", root), watchDone = () => import("../store.js").then(s => s.all("watch")).then(ws => { const n = ws.filter(w => { const r = lookup(w.mhn)?.e; return r && r.id === e.id; }).length; if (root.contains(watchBtn)) watchBtn.textContent = n ? `☆ Bevakas (${n}) – lägg till` : "☆ Bevaka pris"; });
+  watchBtn.addEventListener("click", () => addWatch(isSkin ? mhnFor(e, e.wr.includes("FT") ? "FT" : e.wr[0] || null) : e.mh, watchDone));
+  watchDone();
   fillHistory(root, e, isSkin);
   const tg = root.querySelectorAll("[data-st]");
   tg.forEach(b => b.addEventListener("click", () => { root.querySelector("#priceBox").innerHTML = priceTable(e, b.dataset.st === "1"); tg.forEach(x => x.classList.toggle("on", x === b)); }));
@@ -158,7 +173,7 @@ function priceOverview(e) {
     ${mini("Du får ut (netto)", net ? krUsd(net) : "–", "efter avgift, riktiga pengar")}
     ${mini("Steam Market", steam ? krUsd(steam) : "–", "Steam-krediter")}
     ${stMin < Infinity ? mini("StatTrak™ från", krUsd(stMin)) : ""}${svMin < Infinity ? mini("Souvenir från", krUsd(svMin)) : ""}</div>
-    <div class="muted small" style="margin-top:10px">Pris = lägsta utropspris (listning), inte genomförd försäljning. Prisdata från ${esc(when)}.${stale ? ' <b class="neg">Priserna kan vara gamla.</b>' : ""}</div>
+    <div class="muted small" style="margin-top:10px">Pris = lägsta utropspris (listning), inte genomförd försäljning. Prisdata från ${esc(when)}.${stale ? ' <b class="neg">Priserna kan vara gamla.</b>' : ""}</div>${statusBlock(best?.mhn || (e.wr ? mhnFor(e, e.wr.includes("FT") ? "FT" : e.wr[0] || null) : e.mh), e.wr?.length > 1 && best ? "det billigaste slitaget" : "")}
     ${/^(Gamma )?Doppler$/.test(e.p || "") ? `<div class="small" style="margin-top:8px;color:#d9b36a">⚠ Prisdatan skiljer inte på Doppler-faser. Priset gäller modellen i stort (i praktiken den billigaste fasen) – <b>Ruby, Sapphire, Black Pearl och Emerald är ofta värda mycket mer</b>. Kolla fasens egna pris hos marknadsplatsen innan du köper eller säljer.</div>` : ""}</div>`;
 }
 
@@ -216,9 +231,9 @@ function periodChart(tr) {
   const top = Math.max(...bars.map(b => b.v)) * 1.08, Y = v => pad.t + (1 - v / top) * (h - pad.t - pad.b);
   const last = bars[n - 1], prev = bars[n - 2], chg = (last.v / prev.v - 1) * 100;
   const svg = `<svg class="chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="Medelpris per period på Steam">
-    <line x1="${pad.l}" x2="${w - pad.r}" y1="${h - pad.b}" y2="${h - pad.b}" stroke="#2a2d33"/>
+    <line x1="${pad.l}" x2="${w - pad.r}" y1="${h - pad.b}" y2="${h - pad.b}" style="stroke:var(--line)"/>
     ${bars.map((b, i) => { const cx = pad.l + slot * (i + 0.5), y = Y(b.v), isLast = i === n - 1;
-      return `<rect x="${(cx - bw / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${(h - pad.b - y).toFixed(1)}" rx="3" fill="${isLast ? "#e7e9ec" : "#4a4f58"}"><title>${esc(b.l)}: ${esc(kr(usd2sek(b.v)))}</title></rect>
+      return `<rect x="${(cx - bw / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${(h - pad.b - y).toFixed(1)}" rx="3" fill="${isLast ? "currentColor" : "#8a9099"}"><title>${esc(b.l)}: ${esc(kr(usd2sek(b.v)))}</title></rect>
       <text x="${cx.toFixed(1)}" y="${(y - 6).toFixed(1)}" text-anchor="middle" style="fill:var(--text,#e7e9ec);font-size:11px">${esc(kr(usd2sek(b.v)))}</text>
       <text x="${cx.toFixed(1)}" y="${h - 14}" text-anchor="middle">${esc(b.l)}</text>`; }).join("")}</svg>`;
   return `${svg}<div class="muted small" style="margin-top:6px">Medelpris på Steam för varje period (uträknat ur Steams snitt för 24 h, 7, 30 och 90 dagar – det är inte en dagskurva). Senaste perioden ${pct(chg)} mot perioden före. Steam-priser är i Steam-krediter och ligger ofta över marknadspriset.</div>`;

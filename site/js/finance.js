@@ -1,11 +1,14 @@
 // Vinstmotor: varje köp och försäljning är en egen händelse. Kostnad räknas med glidande genomsnittligt inköpspris (GAV).
 // Föremål med egen float/seed är egna positioner och blandas inte ihop med andra av samma skin.
 import { all } from "./store.js";
-import { steamUsd, cashUsd, bestUsd, lookup } from "./data.js";
+import { steamUsd, cashUsd, bestUsd, lookup, D, ensureStickers } from "./data.js";
 import { usd2sek } from "./util.js";
+import { analysePrice } from "./pricing.js";
 
 export async function loadState() {
   const [items, trades] = await Promise.all([all("items"), all("trades")]);
+  /* Stickers slås upp i katalogen som laddas i bakgrunden: vänta bara om innehav/affärer faktiskt innehåller några */
+  if (!D.stickersReady && (items.some(i => /^Sticker \|/.test(i.mhn)) || trades.some(t => /^Sticker \|/.test(t.mhn)))) await ensureStickers();
   return { items, trades };
 }
 
@@ -60,7 +63,9 @@ export function buildRows(items, trades) {
     const cost = unitCost != null ? unitCost * qty : null;
     const vSteam = steam != null ? steam * qty : null;
     const vCash = cash != null ? cash * qty : null;
+    const ps = analysePrice(D.P.p[it.mhn] || null, { ageMs: D.priceAge ? Date.now() - D.priceAge : 0, mhn: it.mhn }); // pristillförlitlighet (antal marknader, avvikelser, ålder)
     return {
+      ps, firstBuy: p ? p.firstBuy : null, realized: p ? p.realized : 0, sold: p ? p.sold : 0, // realiserad vinst för positionen (för filter)
       it, e, ref, qty, mhn: it.mhn, key, costApprox: approx,
       name: e?.n || it.name || it.mhn, img: e?.img || it.img || "",
       kind: e?.kind || it.kind || "other", rc: e?.rc || it.rc || "#666",
@@ -78,12 +83,13 @@ export function buildRows(items, trades) {
 }
 
 export function totals(rows, pos) {
-  const t = { steam: 0, cash: 0, cost: 0, byKind: {}, count: 0, unrealizedSteam: 0, unrealizedCash: 0, unpriced: 0, unpricedItems: 0, notSellable: 0, withCost: 0, withoutCost: 0 };
+  const t = { steam: 0, cash: 0, cost: 0, byKind: {}, count: 0, unrealizedSteam: 0, unrealizedCash: 0, unpriced: 0, unpricedItems: 0, notSellable: 0, withCost: 0, withoutCost: 0, doubtItems: 0, doubtValue: 0 };
   for (const r of rows) {
     if (r.it.hidden) continue;
     t.count += r.qty;
     if (r.noPrice) { t.unpriced += r.qty; t.unpricedItems++; }
     if (r.notSellable) t.notSellable++;
+    if (!r.noPrice && !r.notSellable && (r.ps.level === "uncertain" || r.ps.level === "stale")) { t.doubtItems++; t.doubtValue += r.vCash || 0; }
     t.steam += r.vSteam || 0; t.cash += r.vCash || 0;
     if (r.cost != null) {
       t.withCost++; t.cost += r.cost;
